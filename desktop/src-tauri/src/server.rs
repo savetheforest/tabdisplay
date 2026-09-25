@@ -141,6 +141,11 @@ fn stream_once(stream: &mut TcpStream, tablet: (u32, u32), target: &Mutex<Option
     let interval = Duration::from_secs(1) / s.fps.max(1);
     let (mut frame, mut nal) = (Vec::new(), Vec::new());
     let (mut last, mut pending) = (Instant::now() - interval, false);
+    // Hardware decoders (the tablet's MediaTek one) hold a few frames before showing them, so a lone
+    // update (cursor move, a typed letter) would sit in the decoder until the screen changes again.
+    // Repeating the last frame for a moment pushes it out; identical frames encode to a few bytes.
+    const FLUSH: Duration = Duration::from_millis(250);
+    let mut last_change = Instant::now() - FLUSH;
     // Fell back to mirroring because the driver was down: switch to extending once it's back.
     let waiting_for_driver = s.mode == Mode::Extend && _virtual.is_none() && display::find_device().is_none();
     let mut next_check = Instant::now();
@@ -153,7 +158,8 @@ fn stream_once(stream: &mut TcpStream, tablet: (u32, u32), target: &Mutex<Option
         }
         let wait = interval.saturating_sub(last.elapsed()).as_millis().max(1) as u32;
         match cap.next(&mut frame, wait) {
-            Ok(fresh) => pending |= fresh,
+            Ok(true) => (pending, last_change) = (true, Instant::now()),
+            Ok(false) => pending |= last_change.elapsed() < FLUSH,
             Err(e) => {
                 // e.g. ACCESS_LOST on a mode change, UAC prompt or lock screen: rebuild.
                 eprintln!("capture lost: {e}");
