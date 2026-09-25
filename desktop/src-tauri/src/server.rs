@@ -52,6 +52,21 @@ fn be_f32(p: &[u8], i: usize) -> f32 {
     f32::from_be_bytes(p[i..i + 4].try_into().unwrap())
 }
 
+pub const BEACON_PORT: u16 = 7071;
+
+/// Announces this PC on the LAN once a second so tablets can list it without typing an IP.
+/// Payload: `TABDISPLAY <computer name>`; the tablet takes the address from the packet's source.
+pub fn beacon() {
+    let name = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "PC".into());
+    let msg = format!("TABDISPLAY {name}");
+    let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0") else { return };
+    let _ = sock.set_broadcast(true);
+    loop {
+        let _ = sock.send_to(msg.as_bytes(), ("255.255.255.255", BEACON_PORT));
+        thread::sleep(Duration::from_secs(1));
+    }
+}
+
 /// Accepts one tablet at a time, forever.
 pub fn run() {
     let listener = match TcpListener::bind(("0.0.0.0", PORT)) {
@@ -60,10 +75,11 @@ pub fn run() {
     };
     set_status("Aguardando tablet");
     for stream in listener.incoming().flatten() {
-        let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_default();
-        set_status(format!("Conectado: {peer}"));
-        if let Err(e) = handle(stream) {
-            eprintln!("session ended: {e}");
+        match handle(stream) {
+            // The tablet's USB probe connects and hangs up without a HELLO: not a session.
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => continue,
+            Err(e) => eprintln!("session ended: {e}"),
+            Ok(()) => {}
         }
         set_status("Aguardando tablet");
     }
@@ -77,6 +93,8 @@ fn handle(mut stream: TcpStream) -> io::Result<()> {
     if kind != HELLO || hello.len() != 12 {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "expected HELLO"));
     }
+    let peer = stream.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default();
+    set_status(format!("Conectado: {}", if peer == "127.0.0.1" { "USB".to_string() } else { peer }));
     let tablet = (be_u32(&hello, 0), be_u32(&hello, 4));
     eprintln!("tablet {}x{} @ {}dpi", tablet.0, tablet.1, be_u32(&hello, 8));
     if display::ensure_modes(&[tablet]).unwrap_or(false) {

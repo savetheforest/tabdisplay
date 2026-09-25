@@ -22,6 +22,7 @@ import android.widget.TextView
 
 class MainActivity : Activity() {
     private var stream: Stream? = null
+    private var discovery: Discovery? = null
     private val prefs by lazy { getPreferences(MODE_PRIVATE) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -33,37 +34,55 @@ class MainActivity : Activity() {
     private fun showConnect(message: String?) {
         val width = LinearLayout.LayoutParams((420 * resources.displayMetrics.density).toInt(), -2)
         val info = TextView(this).apply {
-            text = message ?: "USB: no PC, clique em \"Conectar por USB\" antes."
+            text = message ?: "Procurando PCs com o TabDisplay aberto…"
             gravity = Gravity.CENTER
         }
+        // One button per PC found; rebuilt only when the list changes so typing an IP isn't interrupted.
+        val pcs = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val ip = EditText(this).apply {
-            hint = "IP do PC"
+            hint = "Ou digite o IP do PC"
             setText(prefs.getString("ip", ""))
             isSingleLine = true
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI
         }
-        val wifi = Button(this).apply {
-            text = "Conectar por Wi‑Fi"
+        val manual = Button(this).apply {
+            text = "Conectar pelo IP"
             setOnClickListener {
                 val host = ip.text.toString().trim()
                 prefs.edit().putString("ip", host).apply()
                 showDisplay(host)
             }
         }
-        val usb = Button(this).apply {
-            text = "Conectar por USB"
-            setOnClickListener { showDisplay("127.0.0.1") } // PC ran `adb reverse`
-        }
         setContentView(LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
-            listOf(info, ip, wifi, usb).forEach { addView(it, width) }
+            listOf(info, pcs, ip, manual).forEach { addView(it, width) }
         })
         window.insetsController?.show(WindowInsets.Type.systemBars()) // after setContentView: needs the decor view
+
+        discovery?.stop()
+        discovery = Discovery(this) { found ->
+            runOnUiThread {
+                pcs.removeAllViews()
+                for (pc in found) {
+                    pcs.addView(Button(this).apply {
+                        text = if (pc.usb) "USB (cabo)" else "${pc.name}  ·  Wi‑Fi ${pc.host}"
+                        setOnClickListener { showDisplay(pc.host) }
+                    }, width)
+                }
+            }
+        }.also { it.start() }
+    }
+
+    override fun onDestroy() {
+        discovery?.stop()
+        super.onDestroy()
     }
 
     @SuppressLint("ClickableViewAccessibility")
     private fun showDisplay(host: String) {
+        discovery?.stop()
+        discovery = null
         val view = SurfaceView(this)
         val container = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)

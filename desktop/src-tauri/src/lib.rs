@@ -75,6 +75,7 @@ pub fn run() {
             settings::init(app.path().app_config_dir()?);
             let _ = display::ensure_modes(&[]);
             std::thread::spawn(server::run);
+            std::thread::spawn(server::beacon);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![status, get_settings, set_settings, options, restart_driver, adb_reverse])

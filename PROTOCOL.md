@@ -13,3 +13,8 @@ Cada mensagem tem o formato `[type:u8][len:u32 BE][payload:len bytes]`, com todo
 Sequência: tablet envia HELLO → PC envia CONFIG → VIDEO... (o primeiro é keyframe) ⇄ TOUCH.
 Mensagens acima de 16 MiB derrubam a conexão.
 USB = a mesma conexão via `adb reverse tcp:7070 tcp:7070` (o tablet conecta em 127.0.0.1).
+
+## Descoberta
+O PC manda, uma vez por segundo, um broadcast UDP para `255.255.255.255:7071` com o texto `TABDISPLAY <nome do computador>`.
+O tablet pega o IP pelo remetente do pacote e lista o PC na tela de conexão.
+O USB aparece na lista quando `127.0.0.1:7070` aceita conexão (ou seja, quando o PC já rodou o `adb reverse`).
