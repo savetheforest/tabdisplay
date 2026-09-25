@@ -23,4 +23,4 @@ então use **Reiniciar driver** na janela do app quando pedir. Sem o driver, o a
 Limites conhecidos:
 - Nunca recarregue o driver pelo pipe (`RELOAD_DRIVER`/`SETDISPLAYCOUNT`): na versão 25.7 ele crasha (Código 43).
 - Com mais de ~100 modos no XML (resoluções × `g_refresh_rate`) o driver não cria o monitor.
-- O cursor do mouse não aparece no vídeo.
+
