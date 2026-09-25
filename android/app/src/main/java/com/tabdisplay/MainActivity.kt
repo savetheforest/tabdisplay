@@ -3,6 +3,8 @@ package com.tabdisplay
 import android.annotation.SuppressLint
 import android.app.Activity
 import android.graphics.Color
+import android.media.MediaCodecList
+import android.media.MediaFormat
 import android.os.Bundle
 import android.text.InputType
 import android.view.Gravity
@@ -85,7 +87,8 @@ class MainActivity : Activity() {
         view.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
                 val bounds = windowManager.currentWindowMetrics.bounds
-                val hello = intArrayOf(bounds.width(), bounds.height(), resources.displayMetrics.densityDpi)
+                val (w, h) = decodableSize(bounds.width(), bounds.height())
+                val hello = intArrayOf(w, h, resources.displayMetrics.densityDpi)
                 val onVideoSize = { w: Int, h: Int -> runOnUiThread { video = w to h; fit() } }
                 stream = Stream(host, holder.surface, hello, onVideoSize) { reason ->
                     runOnUiThread {
@@ -112,5 +115,22 @@ class MainActivity : Activity() {
             stream?.touch(action, e.x / v.width, e.y / v.height)
             true
         }
+    }
+
+    /**
+     * Largest size with the screen's aspect ratio that the H.264 decoder handles at 60 fps.
+     * The Redmi Pad 2 screen is 2560x1600 but its decoder tops out at 2560x1440, so this gives 2304x1440
+     * and the SurfaceView scales it up.
+     */
+    private fun decodableSize(width: Int, height: Int): Pair<Int, Int> {
+        val caps = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
+            .filter { !it.isEncoder && MediaFormat.MIMETYPE_VIDEO_AVC in it.supportedTypes }
+            .map { it.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC).videoCapabilities }
+        for (percent in 100 downTo 25) {
+            val w = width * percent / 100 and 15.inv()
+            val h = height * percent / 100 and 15.inv()
+            if (caps.any { it.areSizeAndRateSupported(w, h, 60.0) }) return w to h
+        }
+        return 1280 to 720
     }
 }

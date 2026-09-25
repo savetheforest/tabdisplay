@@ -1,6 +1,6 @@
 use windows::core::{Interface, Result};
-use windows::Win32::Foundation::HMODULE;
-use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
+use windows::Win32::Foundation::{HMODULE, RECT};
+use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
 use windows::Win32::Graphics::Direct3D11::*;
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::*;
@@ -17,13 +17,14 @@ pub struct Capture {
 }
 
 impl Capture {
-    // ponytail: always output 0 of the first adapter (primary). Phase 2 picks the virtual display's output.
-    pub fn primary() -> Result<Self> {
+    /// Duplicates the monitor with GDI name `device` (e.g. `\\.\DISPLAY5`), or the primary one if None.
+    pub fn open(device: Option<&str>) -> Result<Self> {
         unsafe {
+            let (adapter, output) = find_output(device)?;
             let (mut device, mut ctx) = (None, None);
             D3D11CreateDevice(
-                None,
-                D3D_DRIVER_TYPE_HARDWARE,
+                &adapter,
+                D3D_DRIVER_TYPE_UNKNOWN,
                 HMODULE::default(),
                 D3D11_CREATE_DEVICE_BGRA_SUPPORT,
                 None,
@@ -33,7 +34,6 @@ impl Capture {
                 Some(&mut ctx),
             )?;
             let device: ID3D11Device = device.unwrap();
-            let output: IDXGIOutput1 = device.cast::<IDXGIDevice>()?.GetAdapter()?.EnumOutputs(0)?.cast()?;
             let r = output.GetDesc()?.DesktopCoordinates;
             let (width, height) = ((r.right - r.left) as usize, (r.bottom - r.top) as usize);
             let dup = output.DuplicateOutput(&device)?;
@@ -95,4 +95,43 @@ impl Capture {
             Ok(true)
         }
     }
+}
+
+/// Every output on every adapter, with its GDI name and desktop rect. Primary first.
+fn outputs() -> Result<Vec<(IDXGIAdapter1, IDXGIOutput1, String, RECT)>> {
+    let mut all = Vec::new();
+    unsafe {
+        let factory: IDXGIFactory1 = CreateDXGIFactory1()?;
+        let mut i = 0;
+        while let Ok(adapter) = factory.EnumAdapters1(i) {
+            i += 1;
+            let mut j = 0;
+            while let Ok(output) = adapter.EnumOutputs(j) {
+                j += 1;
+                let desc = output.GetDesc()?;
+                let n = &desc.DeviceName;
+                let name = String::from_utf16_lossy(&n[..n.iter().position(|&c| c == 0).unwrap_or(n.len())]);
+                all.push((adapter.clone(), output.cast()?, name, desc.DesktopCoordinates));
+            }
+        }
+    }
+    Ok(all)
+}
+
+/// Monitors attached to the desktop: (GDI name, width, height).
+pub fn monitors() -> Vec<(String, u32, u32)> {
+    outputs()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(_, _, name, r)| (name, (r.right - r.left) as u32, (r.bottom - r.top) as u32))
+        .collect()
+}
+
+/// The primary output, or the one whose GDI name is `device`.
+fn find_output(device: Option<&str>) -> Result<(IDXGIAdapter1, IDXGIOutput1)> {
+    outputs()?
+        .into_iter()
+        .find(|(_, _, name, _)| device.is_none_or(|d| d == name))
+        .map(|(a, o, _, _)| (a, o))
+        .ok_or_else(|| windows::core::Error::new(DXGI_ERROR_NOT_FOUND, "monitor não encontrado"))
 }

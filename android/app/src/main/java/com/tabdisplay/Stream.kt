@@ -108,7 +108,6 @@ class Stream(
         freeInputs.clear()
         val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
             setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
-            setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, width * height)
         }
         codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC).apply {
             // Callbacks run on the main looper (this thread has none).

@@ -4,18 +4,85 @@
     <meta charset="UTF-8" />
     <title>TabDisplay</title>
     <style>
-      :root { color-scheme: light dark; font: 15px system-ui, sans-serif; }
-      body { margin: 0; padding: 20px; }
-      p { margin: 0 0 12px; }
-      code { font-size: 18px; }
-      button { font: inherit; padding: 8px 14px; }
+      :root {
+        color-scheme: light dark;
+        font: 14px system-ui, sans-serif;
+        --muted: #888;
+        --line: #8884;
+      }
+      body { margin: 0; padding: 16px 20px; }
+      #status { font-weight: 600; margin: 0 0 4px; }
+      .muted { color: var(--muted); margin: 0 0 12px; }
+      fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 0 0 12px; padding: 8px 12px 12px; }
+      legend { color: var(--muted); padding: 0 4px; }
+      label { display: grid; grid-template-columns: 110px 1fr; align-items: center; gap: 8px; margin-top: 8px; }
+      select, input[type="range"] { width: 100%; font: inherit; }
+      button { font: inherit; padding: 6px 12px; }
+      code { font-size: 15px; }
+      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      [hidden] { display: none !important; }
     </style>
     <script type="module" src="/main.js" defer></script>
   </head>
   <body>
     <p id="status">…</p>
-    <p>Wi‑Fi: no tablet, digite <code id="ip">…</code></p>
-    <p><button id="usb">Conectar por USB</button></p>
-    <p id="msg"></p>
+    <p class="muted">Wi‑Fi: no tablet, digite <code id="ip">…</code></p>
+
+    <fieldset>
+      <legend>Conexão</legend>
+      <div class="row">
+        <button id="usb">Conectar por USB</button>
+        <span id="msg" class="muted"></span>
+      </div>
+    </fieldset>
+
+    <fieldset id="form">
+      <legend>Tela</legend>
+      <label>Modo
+        <select id="mode">
+          <option value="extend">Estender (2º monitor)</option>
+          <option value="mirror">Espelhar</option>
+        </select>
+      </label>
+      <label data-for="extend">Resolução
+        <select id="resolution"></select>
+      </label>
+      <label data-for="extend">Posição
+        <select id="position">
+          <option value="right">À direita</option>
+          <option value="left">À esquerda</option>
+          <option value="above">Acima</option>
+          <option value="below">Abaixo</option>
+        </select>
+      </label>
+      <label data-for="mirror">Monitor
+        <select id="mirror_monitor"></select>
+      </label>
+      <label>FPS
+        <select id="fps">
+          <option>30</option>
+          <option>60</option>
+          <option>90</option>
+          <option>120</option>
+        </select>
+      </label>
+      <label>Bitrate <span class="row"><input id="bitrate_mbps" type="range" min="5" max="60" step="5" /><span id="bitrate_label"></span></span></label>
+      <label>Encoder
+        <select id="encoder">
+          <option value="auto">Automático</option>
+          <option value="gpu">GPU</option>
+          <option value="cpu">CPU</option>
+        </select>
+      </label>
+      <label>Toque <span><input id="touch" type="checkbox" /> controla o mouse</span></label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Monitor virtual</legend>
+      <div class="row">
+        <span id="driver"></span>
+        <button id="restart">Reiniciar driver</button>
+      </div>
+    </fieldset>
   </body>
 </html>

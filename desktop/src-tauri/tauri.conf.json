@@ -11,8 +11,8 @@
     "windows": [
       {
         "title": "TabDisplay",
-        "width": 420,
-        "height": 300
+        "width": 460,
+        "height": 620
       }
     ],
     "security": {

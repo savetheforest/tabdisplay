@@ -582,6 +582,8 @@ name = "desktop"
 version = "0.1.0"
 dependencies = [
  "openh264",
+ "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "windows",
