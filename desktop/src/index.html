@@ -218,6 +218,12 @@
             <button class="btn" id="restart">Reiniciar</button>
           </div>
           <div class="row">
+            <svg class="icon"><use href="#i-power" /></svg>
+            <div class="label"><span class="title">Licença</span><span class="desc" id="license-desc"></span></div>
+            <input id="license-token" type="text" placeholder="Cole a licença (TDL1.…)" />
+            <button class="btn" id="license-activate">Ativar</button>
+          </div>
+          <div class="row">
             <svg class="icon"><use href="#i-touch" /></svg>
             <div class="label"><span class="title">Guia de primeiro uso</span><span class="desc">Instalar o app no tablet, permissões e como conectar</span></div>
             <button class="btn" id="show-guide">Ver instruções de novo</button>
@@ -226,6 +232,15 @@
         <p class="muted small">Fechar a janela deixa o TabDisplay na bandeja. Para sair de vez, use “Sair” no ícone da bandeja.</p>
       </section>
     </main>
+
+    <dialog id="license-dialog">
+      <h3>Estender a tela pede uma licença</h3>
+      <p class="muted">Sem licença o TabDisplay espelha uma tela normalmente. Para usar o tablet como segundo monitor (Estender), ative uma licença em Avançado.</p>
+      <div class="actions">
+        <button class="btn" id="license-close">Agora não</button>
+        <button class="btn" id="license-buy">Comprar licença</button>
+      </div>
+    </dialog>
 
     <dialog id="guide">
       <h3 id="guide-title"></h3>

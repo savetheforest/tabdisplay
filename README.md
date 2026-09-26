@@ -49,6 +49,19 @@ cd desktop && npm run tauri dev
 cd android && ./gradlew installDebug
 ```
 
+## Licença (modo estender)
+
+Sem licença o app só espelha; estender exige uma licença válida (Avançado → Licença). A validação é offline: a licença é um texto assinado com Ed25519 e o app traz só a chave pública (`desktop/src-tauri/src/license.rs`).
+
+Do lado de quem vende:
+
+```bash
+node scripts/license.mjs keygen                        # uma vez: guarda a chave privada em ~/.tabdisplay e imprime a pública
+node scripts/license.mjs issue "Nome" "email@exemplo.com"  # imprime a licença para enviar ao cliente
+```
+
+A chave privada nunca entra no repositório. Se trocar o par de chaves, atualize `PUBLIC_KEY` em `license.rs` (licenças antigas deixam de valer). O link do botão “Comprar licença” é `BUY_URL` no mesmo arquivo.
+
 ## Monitor virtual (modo estender)
 O app grava as resoluções em `C:\VirtualDisplayDriver\vdd_settings.xml`, que o driver só lê ao iniciar.
 O instalador já faz esse reinício; **Reiniciar driver** na janela do app fica para casos raros

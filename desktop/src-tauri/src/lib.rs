@@ -1,6 +1,7 @@
 mod audio;
 mod encode;
 mod input;
+mod license;
 mod pairing;
 mod server;
 mod settings;
@@ -198,8 +199,8 @@ fn tray(app: &tauri::App) -> tauri::Result<()> {
             id @ ("extend" | "mirror") => {
                 let mut s = settings::get();
                 s.mode = if id == "extend" { settings::Mode::Extend } else { settings::Mode::Mirror };
-                sync_tray(s.mode);
                 settings::set(s);
+                sync_tray(settings::get().mode); // stays Mirror without a licence
             }
             "quit" => app.exit(0),
             _ => {}
@@ -239,6 +240,34 @@ fn ui_info(app: tauri::AppHandle) -> serde_json::Value {
 }
 
 #[tauri::command]
+fn license_status() -> serde_json::Value {
+    let l = license::current();
+    serde_json::json!({ "valid": l.is_some(), "name": l.as_ref().map(|l| l.name.clone()), "email": l.map(|l| l.email), "buy_url": license::BUY_URL })
+}
+
+#[tauri::command]
+fn activate_license(token: String) -> Result<serde_json::Value, String> {
+    license::activate(&token).map_err(String::from)?;
+    Ok(license_status())
+}
+
+#[tauri::command]
+fn remove_license() -> serde_json::Value {
+    license::remove();
+    settings::set(settings::get()); // drops Extend now that it's no longer allowed
+    sync_tray(settings::get().mode);
+    license_status()
+}
+
+#[tauri::command]
+fn open_buy_page() {
+    #[cfg(windows)]
+    let _ = std::process::Command::new("cmd").args(["/c", "start", "", license::BUY_URL]).spawn();
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(license::BUY_URL).spawn();
+}
+
+#[tauri::command]
 fn set_autostart(app: tauri::AppHandle, on: bool) -> bool {
     let launcher = app.autolaunch();
     let _ = if on { launcher.enable() } else { launcher.disable() };
@@ -254,6 +283,7 @@ pub fn run() {
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--minimized"])))
         .setup(|app| {
             let _ = APP.set(app.handle().clone());
+            license::init(app.path().app_config_dir()?); // before settings: extending needs it
             settings::init(app.path().app_config_dir()?);
             pairing::init(app.path().app_config_dir()?);
             tls::init(app.path().app_config_dir()?);
@@ -282,6 +312,10 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             status,
+            license_status,
+            activate_license,
+            remove_license,
+            open_buy_page,
             get_settings,
             set_settings,
             options,
