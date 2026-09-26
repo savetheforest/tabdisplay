@@ -6,7 +6,8 @@ use crate::sys::{capture::Capture, display, encode::HwEncoder, input::Injector};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::{self, Read, Write};
-use std::net::{Shutdown, TcpListener, TcpStream};
+use crate::tls::{self, Accepted, Conn};
+use std::net::{Shutdown, TcpListener};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
@@ -15,7 +16,7 @@ use std::time::{Duration, Instant};
 
 pub const PORT: u16 = 7070;
 pub const BEACON_PORT: u16 = 7071;
-const PROTOCOL: u32 = 2;
+const PROTOCOL: u32 = 3;
 
 // Message types. Control messages carry JSON; VIDEO and INPUT are binary. See PROTOCOL.md.
 pub const HELLO: u8 = 1;
@@ -120,7 +121,16 @@ pub fn run() {
     };
     set_status("Aguardando tablet");
     for stream in listener.incoming().flatten() {
-        match handle(stream) {
+        let conn = match tls::accept(stream) {
+            Ok(Accepted::Tls(conn)) => conn,
+            Ok(Accepted::Plain(mut old)) => {
+                // Protocol 2 was plaintext: the message reaches the old app as a plain ERROR.
+                let _ = refuse(&mut old, "Este TabDisplay do PC é mais novo (conexão criptografada): atualize o app do tablet.");
+                continue;
+            }
+            Err(_) => continue, // probe or a client that fumbled the handshake: not a session
+        };
+        match handle(conn) {
             // The tablet's USB probe connects and hangs up without a HELLO: not a session.
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => continue,
             Err(e) => eprintln!("session ended: {e}"),
@@ -217,8 +227,7 @@ impl Adapt {
     }
 }
 
-fn handle(mut stream: TcpStream) -> io::Result<()> {
-    stream.set_nodelay(true)?;
+fn handle(mut stream: Conn) -> io::Result<()> {
     let (kind, payload) = read_msg(&mut stream)?;
     let hello = match serde_json::from_slice::<Hello>(&payload) {
         Ok(h) if kind == HELLO && h.v == PROTOCOL => h,
@@ -332,7 +341,7 @@ fn plan(s: &Settings, tablet: (u32, u32), auto_level: usize) -> ((u32, u32), u32
 }
 
 /// Shows a code on the PC and waits for the tablet to send it back. Ok = paired (token sent).
-fn pair(stream: &mut TcpStream, hello: &Hello) -> io::Result<()> {
+fn pair(stream: &mut Conn, hello: &Hello) -> io::Result<()> {
     set_status(format!("Pareando com {}", hello.device_name));
     let code = pairing::start(&hello.device_name);
     if std::env::var_os("TABDISPLAY_DEBUG").is_some() {
@@ -362,7 +371,7 @@ fn pair(stream: &mut TcpStream, hello: &Hello) -> io::Result<()> {
 
 /// Streams with the current settings until they change, the tablet rotates, capture is lost, or the
 /// tablet leaves.
-fn stream_once(stream: &mut TcpStream, shared: &Shared, virtual_display: &mut Option<display::VirtualDisplay>, audio: &Receiver<Vec<u8>>) -> io::Result<()> {
+fn stream_once(stream: &mut Conn, shared: &Shared, virtual_display: &mut Option<display::VirtualDisplay>, audio: &Receiver<Vec<u8>>) -> io::Result<()> {
     let version = settings::VERSION.load(Ordering::Relaxed);
     let s = settings::get();
     let tablet = *shared.tablet.lock().unwrap();

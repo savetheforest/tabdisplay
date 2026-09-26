@@ -4,6 +4,7 @@ mod input;
 mod pairing;
 mod server;
 mod settings;
+mod tls;
 // Platform layer: same module names and APIs on each OS; the rest of the app uses `sys::…`.
 #[cfg(windows)]
 mod win {
@@ -252,6 +253,7 @@ pub fn run() {
             let _ = APP.set(app.handle().clone());
             settings::init(app.path().app_config_dir()?);
             pairing::init(app.path().app_config_dir()?);
+            tls::init(app.path().app_config_dir()?);
             tray(app)?;
             #[cfg(target_os = "macos")]
             mac::permissions::request();

@@ -1,12 +1,12 @@
-# Protocolo TabDisplay (v2)
+# Protocolo TabDisplay (v3)
 
-Uma conexão TCP na porta **7070**. O PC é o servidor e o tablet é o cliente.
+Uma conexão TCP na porta **7070**, dentro de **TLS 1.3** (ver "Segurança"). O PC é o servidor e o tablet é o cliente.
 Cada mensagem tem o formato `[type:u8][len:u32 BE][payload:len bytes]`.
 Mensagens de controle levam JSON (UTF‑8); VIDEO e INPUT são binárias (big-endian).
 
 | type | nome          | direção     | payload |
 |------|---------------|-------------|---------|
-| 1    | HELLO         | tablet → PC | `{"v":2, "device_id", "device_name", "token", "screen":[w,h], "decodable":[w,h], "dpi"}` (primeira mensagem) |
+| 1    | HELLO         | tablet → PC | `{"v":3, "device_id", "device_name", "token", "screen":[w,h], "decodable":[w,h], "dpi"}` (primeira mensagem) |
 | 2    | VIDEO         | PC → tablet | uma access unit H.264 Annex‑B (SPS/PPS antes de cada IDR) |
 | 3    | INPUT         | tablet → PC | um quadro de toque/caneta (binário, abaixo) |
 | 4    | CONFIG        | PC → tablet | `{"width","height"}` do vídeo; (re)cria o decoder. Chega de novo quando as configurações mudam |
@@ -25,7 +25,7 @@ Mensagens de controle levam JSON (UTF‑8); VIDEO e INPUT são binárias (big-en
 - `decodable`: o maior tamanho, na proporção da tela, que o decoder H.264 do tablet aguenta (Redmi Pad 2: 2304×1440).
   O PC nunca manda vídeo maior que isso.
 - Sequência: HELLO → (PAIR_REQUIRED ⇄ PAIR → PAIRED, só na primeira vez pelo Wi‑Fi) → CONFIG → VIDEO... ⇄ INPUT (+ PING/PONG/STATS a cada segundo, RESIZE ao girar).
-- Versão diferente de 2 → ERROR pedindo para atualizar. Mensagens acima de 16 MiB derrubam a conexão.
+- Versão diferente de 3 → ERROR pedindo para atualizar. Mensagens acima de 16 MiB derrubam a conexão.
 
 ## INPUT
 Um quadro por `MotionEvent` do Android, com todos os contatos daquele instante:
@@ -48,7 +48,13 @@ conexão não chega em 127.0.0.1 nesse caso, então não tem como saber que é o
 outra sem o token.
 Só o USB via `adb reverse` (a conexão chega em 127.0.0.1) não pede pareamento: o cabo com depuração
 USB ligada já é prova física.
-O tráfego não é criptografado: o token impede que outro aparelho da rede controle o PC, não que alguém escute.
+Depois do pareamento o token vai em cada HELLO (já dentro do TLS).
+
+## Segurança
+Toda a sessão (HELLO, token, vídeo, áudio, input) vai dentro de TLS 1.3. O PC gera um certificado autoassinado na primeira execução (`cert.der`/`key.der` na pasta de configuração) e o mantém. O tablet aceita o certificado no primeiro contato e **fixa** o SHA-256 dele por PC (confiança no primeiro uso, como o token de pareamento). Se o certificado mudar depois (PC reinstalado ou outro computador respondendo), o tablet recusa, esquece o PC e o token, e a próxima conexão pede o código de pareamento de novo.
+O primeiro contato é o ponto fraco do modelo: quem estiver no meio da rede exatamente nessa hora pode se passar pelo PC. Pelo USB o cabo continua sendo a prova.
+
+Transição: um tablet da versão 2 (sem TLS) que conecta num PC novo recebe um ERROR em texto puro pedindo para atualizar o app; um tablet novo num PC antigo não consegue o handshake e mostra "atualize o TabDisplay no PC e no tablet".
 
 ## Descoberta
 O PC manda, uma vez por segundo, um broadcast UDP na porta 7071 com o texto

@@ -50,6 +50,8 @@
     <string name="connection_dropped">A conexão com o PC caiu.</string>
     <string name="error_generic">Erro: %1$s</string>
     <string name="invalid_message">Mensagem inválida do PC</string>
+    <string name="identity_changed">A identidade deste PC mudou (reinstalou o TabDisplay ou é outro computador). Conecte de novo e confirme o código de pareamento.</string>
+    <string name="tls_failed">Não consegui uma conexão segura com o PC. Atualize o TabDisplay no PC e no tablet para a mesma versão.</string>
     <string name="pc_refused">O PC recusou a conexão.</string>
 
     <!-- Notificação da sessão -->
