@@ -245,7 +245,10 @@ fn plan(s: &Settings, tablet: (u32, u32)) -> ((u32, u32), u32, u32) {
 /// Shows a code on the PC and waits for the tablet to send it back. Ok = paired (token sent).
 fn pair(stream: &mut TcpStream, hello: &Hello) -> io::Result<()> {
     set_status(format!("Pareando com {}", hello.device_name));
-    pairing::start(&hello.device_name);
+    let code = pairing::start(&hello.device_name);
+    if std::env::var_os("TABDISPLAY_DEBUG").is_some() {
+        eprintln!("pairing code: {code}"); // for testing on a machine whose screen we can't see
+    }
     crate::show_window(); // the code is on the PC screen; the window may be in the tray
     let ask = |wrong: bool| json!({ "pc_id": pairing::pc_id(), "pc_name": computer_name(), "wrong": wrong });
     send_json(stream, PAIR_REQUIRED, &ask(false))?;
