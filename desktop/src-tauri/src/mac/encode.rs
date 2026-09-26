@@ -147,7 +147,9 @@ impl HwEncoder {
             for (key, v) in [
                 (kVTCompressionPropertyKey_AverageBitRate, bitrate as i32),
                 (kVTCompressionPropertyKey_ExpectedFrameRate, fps as i32),
-                (kVTCompressionPropertyKey_MaxKeyFrameInterval, fps as i32 * 2), // a keyframe every 2 s heals lost frames
+                // Keyframe every 5s: heals a stalled tablet decoder (TCP itself never drops a frame in
+                // transit), and a full frame is much heavier than a delta one, so spacing them out cuts Mbps.
+                (kVTCompressionPropertyKey_MaxKeyFrameInterval, fps as i32 * 5),
             ] {
                 let n = number(v);
                 set(key, n);

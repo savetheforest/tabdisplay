@@ -53,7 +53,9 @@ impl MfEncoder {
             if let Ok(codec) = mft.cast::<ICodecAPI>() {
                 let _ = codec.SetValue(&CODECAPI_AVLowLatencyMode, &VARIANT::from(true));
                 let _ = codec.SetValue(&CODECAPI_AVEncCommonRateControlMode, &VARIANT::from(eAVEncCommonRateControlMode_CBR.0 as u32));
-                let _ = codec.SetValue(&CODECAPI_AVEncMPVGOPSize, &VARIANT::from(fps * 2)); // keyframe every 2s heals dropped frames
+                // Keyframe every 5s: heals a stalled tablet decoder (TCP itself never drops a frame in
+                // transit), and a full frame is much heavier than a delta one, so spacing them out cuts Mbps.
+                let _ = codec.SetValue(&CODECAPI_AVEncMPVGOPSize, &VARIANT::from(fps * 5));
             }
 
             let size = ((w as u64) << 32) | h as u64;
