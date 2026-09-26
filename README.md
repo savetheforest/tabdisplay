@@ -129,6 +129,24 @@ Publicar uma versão:
 4. `gh release create v0.2.0 <instalador> <tar.gz> <.sig> latest.json`. O app só enxerga a release se o endereço for público
    (repositório público ou um endpoint próprio: troque `endpoints`).
 
+## Build automático (GitHub Actions)
+A cada merge na main, `.github/workflows/build.yml` gera, como artefatos da execução (aba Actions → a execução → Artifacts, 30 dias):
+- `tabdisplay-android`: `app-release.apk` e `app-release.aab`;
+- `tabdisplay-windows`: `TabDisplay_<versão>_x64-setup.exe` (com o APK, o adb e o driver do monitor virtual embutidos; roda `cargo test` antes);
+- `tabdisplay-macos`: `TabDisplay_<versão>_aarch64.dmg` (Apple Silicon).
+
+Também dá para rodar sob demanda (Actions → Build → Run workflow). Nos pull requests roda só o `ci.yml` (compila e testa).
+Sem segredos o build sai igual, mas sem assinatura: o APK usa a chave de debug do runner (serve para testar; não atualiza um app instalado com a chave de release),
+o instalador do Windows fica sem assinatura e o app do Mac sem Developer ID. Para assinar de verdade, cadastre em Settings → Secrets and variables → Actions:
+
+| Segredo | Conteúdo |
+|---|---|
+| `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` | `base64 -w0 ~/.tabdisplay/android-release.jks` e os valores de `android-release.properties` |
+| `WINDOWS_CERT_PFX_BASE64`, `WINDOWS_CERT_PASSWORD` | certificado de code signing (.pfx) em base64 e a senha |
+| `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | Developer ID (.p12 em base64) e os dados da notarização |
+| `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | conteúdo de `~/.tabdisplay/updater.key` e a senha (gera os pacotes do atualizador) |
+| `SENTRY_DSN` | liga o relatório de erros no PC e no Android |
+
 ## Licença (modo estender)
 
 Sem licença o app só espelha; estender exige uma licença válida (Avançado → Licença). A validação é offline: a licença é um texto assinado com Ed25519 e o app traz só a chave pública (`desktop/src-tauri/src/license.rs`).

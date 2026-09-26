@@ -12,7 +12,7 @@ name: Build
 #   SENTRY_DSN                                                                                      (relatório de erros)
 on:
   push:
-    branches: [main, ci-build-pipeline]
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
