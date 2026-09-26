@@ -88,6 +88,9 @@ class Discovery(context: Context, private val onChange: (List<Pc>) -> Unit) {
             val list = seen.values.map { it.first }.sortedBy { !it.usb }
             if (list == published) null else list.also { published = it }
         }
-        if (changed != null && running) onChange(changed)
+        if (changed != null && running) {
+            Crumbs.add("discovery", "pcs visible: ${changed.size} (usb: ${changed.count { it.usb }})") // counts only, no names or addresses
+            onChange(changed)
+        }
     }
 }

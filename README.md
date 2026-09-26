@@ -66,6 +66,8 @@ A chave privada nunca entra no repositório. Se trocar o par de chaves, atualize
 
 Desligado por padrão. Para ligar no app do PC, defina o DSN ao compilar (`TABDISPLAY_SENTRY_DSN=https://…@…ingest.sentry.io/… cargo tauri build`) ou no ambiente ao abrir o app. Panics de qualquer thread (o release aborta o processo, então o app espera o envio) e falhas recuperáveis (captura, encoder de hardware, driver) viram eventos; não vão IP, nome do PC/tablet, códigos nem tokens.
 
+No Android é igual: `TABDISPLAY_SENTRY_DSN=… ./gradlew assembleRelease` (sem DSN o Sentry nem inicia). Crashes e erros inesperados de conexão (falha de TLS, por exemplo) chegam com breadcrumbs do fluxo de conexão, sem token, nome ou endereço.
+
 ## Monitor virtual (modo estender)
 O app grava as resoluções em `C:\VirtualDisplayDriver\vdd_settings.xml`, que o driver só lê ao iniciar.
 O instalador já faz esse reinício; **Reiniciar driver** na janela do app fica para casos raros
