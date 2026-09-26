@@ -69,6 +69,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -151,7 +159,7 @@ class MainActivity : ComponentActivity() {
                 Modifier.widthIn(max = 640.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 32.dp, vertical = 40.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                Text("TabDisplay", style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.SemiBold)
+                Text("TabDisplay", style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.SemiBold, modifier = Modifier.semantics { heading() })
                 Text(
                     stringResource(R.string.tagline),
                     style = MaterialTheme.typography.bodyLarge,
@@ -164,10 +172,10 @@ class MainActivity : ComponentActivity() {
                     Notice(it, MaterialTheme.colorScheme.secondaryContainer, MaterialTheme.colorScheme.onSecondaryContainer, progress = true)
                 }
 
-                Text(stringResource(R.string.computers), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
+                Text(stringResource(R.string.computers), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp).semantics { heading() })
                 if (pcs.isEmpty()) {
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 16.dp)) {
-                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                        CircularProgressIndicator(Modifier.size(20.dp).clearAndSetSemantics {}, strokeWidth = 2.dp) // the text beside it says it all
                         Spacer(Modifier.width(16.dp))
                         Text(stringResource(R.string.searching), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
@@ -188,10 +196,11 @@ class MainActivity : ComponentActivity() {
 
     @Composable
     private fun Notice(text: String, container: Color, content: Color, progress: Boolean = false) {
-        Card(colors = CardDefaults.cardColors(containerColor = container, contentColor = content), modifier = Modifier.fillMaxWidth()) {
+        // Live region: TalkBack reads a new error / reconnect notice without the user having to find it.
+        Card(colors = CardDefaults.cardColors(containerColor = container, contentColor = content), modifier = Modifier.fillMaxWidth().semantics { liveRegion = LiveRegionMode.Polite }) {
             Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (progress) {
-                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = content)
+                    CircularProgressIndicator(Modifier.size(18.dp).clearAndSetSemantics {}, strokeWidth = 2.dp, color = content)
                     Spacer(Modifier.width(12.dp))
                 }
                 Text(text)
@@ -286,16 +295,19 @@ class MainActivity : ComponentActivity() {
             }
         }
         var menu by remember { mutableStateOf(false) }
+        val screenDescription = stringResource(R.string.a11y_screen)
+        val menuDescription = stringResource(R.string.a11y_menu)
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             // Letterbox: the PC's aspect ratio in any tablet orientation.
             val ratio = video?.let { it.first.toFloat() / it.second }
             AndroidView(
                 factory = { surface(it, target) },
-                modifier = if (ratio != null) Modifier.align(Alignment.Center).aspectRatio(ratio) else Modifier.fillMaxSize(),
+                modifier = (if (ratio != null) Modifier.align(Alignment.Center).aspectRatio(ratio) else Modifier.fillMaxSize())
+                    .semantics { contentDescription = screenDescription },
             )
             if (video == null) {
                 Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = Color.White)
+                    CircularProgressIndicator(color = Color.White, modifier = Modifier.clearAndSetSemantics {})
                     Spacer(Modifier.height(16.dp))
                     Text(stringResource(R.string.connecting_to, target.name), color = Color.White)
                 }
@@ -317,7 +329,7 @@ class MainActivity : ComponentActivity() {
                     onClick = { menu = true },
                     color = Color.Black.copy(alpha = 0.45f),
                     shape = RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp),
-                    modifier = Modifier.size(width = 72.dp, height = 20.dp),
+                    modifier = Modifier.size(width = 72.dp, height = 20.dp).semantics { contentDescription = menuDescription; role = Role.Button },
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Box(Modifier.size(width = 28.dp, height = 3.dp).background(Color.White.copy(alpha = 0.8f), CircleShape))
