@@ -70,7 +70,7 @@ impl Drop for Capture {
     }
 }
 
-fn pixel_size(id: u32) -> (usize, usize) {
+pub fn pixel_size(id: u32) -> (usize, usize) {
     unsafe {
         let mode = CGDisplayCopyDisplayMode(id);
         if mode.is_null() {

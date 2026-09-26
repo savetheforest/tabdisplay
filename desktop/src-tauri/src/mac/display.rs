@@ -126,14 +126,15 @@ pub fn attach(w: u32, h: u32, hz: u32, pos: Position) -> io::Result<VirtualDispl
 
 impl VirtualDisplay {
     /// Changes size/refresh/position in place (rotation, profile changes); the monitor stays plugged in.
+    /// `w`x`h` are pixels; the monitor is Retina (HiDPI): `w/2`x`h/2` points drawn at 2x, like a real
+    /// 11" tablet screen. (Measured: without HiDPI macOS halves the mode anyway, to 1x pixels.)
     pub fn configure(&mut self, w: u32, h: u32, hz: u32, pos: Position) -> io::Result<()> {
+        let (pw, ph) = (w / 2, h / 2);
         unsafe {
             let settings: *mut AnyObject = msg_send![class(c"CGVirtualDisplaySettings")?, new];
-            // ponytail: 1x (pixels = points) keeps capture and input simple; a HiDPI option would render
-            // at 2x for sharper text at the cost of smaller content.
-            let _: () = msg_send![settings, setHiDPI: 0u32];
+            let _: () = msg_send![settings, setHiDPI: 1u32];
             let mode_alloc: *mut AnyObject = msg_send![class(c"CGVirtualDisplayMode")?, alloc];
-            let mode: *mut AnyObject = msg_send![mode_alloc, initWithWidth: w as usize, height: h as usize, refreshRate: hz as f64];
+            let mode: *mut AnyObject = msg_send![mode_alloc, initWithWidth: pw as usize, height: ph as usize, refreshRate: hz as f64];
             let modes: *mut AnyObject = msg_send![class(c"NSArray")?, arrayWithObject: mode];
             let _: () = msg_send![settings, setModes: modes];
             let applied: Bool = msg_send![self.display, applySettings: settings];
@@ -146,21 +147,21 @@ impl VirtualDisplay {
             // The mode switch lands asynchronously; wait for it before placing the monitor.
             for _ in 0..50 {
                 let b = CGDisplayBounds(self.id);
-                if b.size.width as u32 == w && b.size.height as u32 == h {
+                if b.size.width as u32 == pw && b.size.height as u32 == ph {
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(40));
             }
             if std::env::var_os("TABDISPLAY_DEBUG").is_some() {
                 let b = CGDisplayBounds(self.id);
-                eprintln!("virtual display {} asked {w}x{h}@{hz}, bounds {}x{} pt", self.id, b.size.width, b.size.height);
+                eprintln!("virtual display {} asked {w}x{h}@{hz} px, bounds {}x{} pt, pixels {:?}", self.id, b.size.width, b.size.height, super::capture::pixel_size(self.id));
             }
             let main = CGDisplayBounds(CGMainDisplayID());
             let (mw, mh) = (main.size.width as i32, main.size.height as i32);
             let (x, y) = match pos {
                 Position::Right => (mw, 0),
-                Position::Left => (-(w as i32), 0),
-                Position::Above => (0, -(h as i32)),
+                Position::Left => (-(pw as i32), 0),
+                Position::Above => (0, -(ph as i32)),
                 Position::Below => (0, mh),
             };
             let mut config = std::ptr::null_mut();
