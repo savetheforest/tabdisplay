@@ -108,8 +108,11 @@ class Stream(
     fun start() = thread(name = "stream") {
         val reason = try {
             run()
+            Crumbs.add("stream", "closed by the PC")
             context.getString(R.string.pc_closed)
         } catch (e: Exception) {
+            Crumbs.add("stream", "error: ${e.javaClass.simpleName}")
+            if (Crumbs.unexpected(e)) io.sentry.Sentry.captureException(e)
             pcReason ?: friendly(e)
         }
         if (close()) events.onClose(reason)
@@ -171,6 +174,7 @@ class Stream(
         socket.tcpNoDelay = true
         socket.connect(InetSocketAddress(host, PORT), 3000)
         connected = true
+        Crumbs.add("stream", "tcp connected")
         val tls = secure()
         out = DataOutputStream(BufferedOutputStream(tls.getOutputStream()))
         sendJson(HELLO, hello)
@@ -185,8 +189,14 @@ class Stream(
             when (type) {
                 VIDEO -> decode(payload)
                 CONFIG -> json(payload).let { startDecoder(it.getInt("width"), it.getInt("height")) }
-                PAIR_REQUIRED -> json(payload).let { events.onPairRequired(it.optString("pc_name", "PC"), it.optBoolean("wrong")) }
-                PAIRED -> json(payload).let { events.onPaired(it.getString("pc_id"), it.getString("token")) }
+                PAIR_REQUIRED -> {
+                    Crumbs.add("stream", "pairing required")
+                    json(payload).let { events.onPairRequired(it.optString("pc_name", "PC"), it.optBoolean("wrong")) }
+                }
+                PAIRED -> {
+                    Crumbs.add("stream", "paired") // never the token
+                    json(payload).let { events.onPaired(it.getString("pc_id"), it.getString("token")) }
+                }
                 AUDIO -> playAudio(payload)
                 PROFILE -> json(payload).let { events.onProfile(it.optString("profile")) }
                 ERROR -> pcReason = json(payload).optString("message", context.getString(R.string.pc_refused))
@@ -224,6 +234,7 @@ class Stream(
         val fingerprint = MessageDigest.getInstance("SHA-256").digest(cert).joinToString("") { "%02x".format(it) }
         if (!events.onServerCertificate(fingerprint)) throw SecurityException(context.getString(R.string.identity_changed))
         secured = true
+        Crumbs.add("stream", "tls up")
         return ssl
     }
 
