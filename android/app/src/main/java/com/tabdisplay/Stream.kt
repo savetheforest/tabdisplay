@@ -54,7 +54,7 @@ interface StreamEvents {
 /** One session with the PC: reads video into a MediaCodec rendering to [surface], sends touches back. */
 class Stream(
     private val host: String,
-    private val surface: Surface,
+    surface: Surface,
     private val hello: JSONObject,
     private val events: StreamEvents,
 ) {
@@ -68,6 +68,11 @@ class Stream(
     private val decoderHandler = Handler(decoderThread.looper)
     private lateinit var out: DataOutputStream
     @Volatile private var codec: MediaCodec? = null
+    /** Guards [codec] and [surface]: the reader thread decodes while the UI thread attaches/detaches the surface. */
+    private val lock = Any()
+    private var surface: Surface? = surface
+    /** Last CONFIG size; lets the decoder restart when a new surface shows up. */
+    @Volatile private var videoSize: Pair<Int, Int>? = null
     /** Frames shown since the last PING (the PC pings once a second, so this is fps). */
     private val rendered = java.util.concurrent.atomic.AtomicInteger()
     @Volatile private var connected = false
@@ -96,10 +101,26 @@ class Stream(
         if (!closed.compareAndSet(false, true)) return false
         runCatching { socket.close() }
         sender.shutdownNow()
-        codec?.let { runCatching { it.stop(); it.release() } }
-        codec = null
+        synchronized(lock) { releaseCodec() }
         decoderThread.quitSafely()
         return true
+    }
+
+    private fun releaseCodec() {
+        codec?.let { runCatching { it.stop(); it.release() } }
+        codec = null
+    }
+
+    /** The screen went away (lock, app switch): stop decoding but keep the connection, so the PC keeps the monitor. */
+    fun detach() = synchronized(lock) {
+        surface = null
+        releaseCodec()
+    }
+
+    /** The screen is back: the PC re-sends CONFIG and a keyframe (it rebuilds on RESIZE), which restarts the decoder. */
+    fun attach(newSurface: Surface, decodableW: Int, decodableH: Int) {
+        synchronized(lock) { surface = newSurface }
+        if (videoSize != null) resize(decodableW, decodableH)
     }
 
     /** One INPUT frame: every touch/pen contact of a MotionEvent, already encoded (see [Input]). */
@@ -161,15 +182,23 @@ class Stream(
     }
 
     private fun startDecoder(width: Int, height: Int) {
+        videoSize = width to height
         events.onVideoSize(width, height)
-        codec?.release()
-        freeInputs.clear()
+        synchronized(lock) {
+            releaseCodec()
+            freeInputs.clear()
+            val target = surface ?: return // no screen right now; attach() asks the PC for a new CONFIG
+            codec = newDecoder(width, height, target)
+        }
+    }
+
+    private fun newDecoder(width: Int, height: Int, target: Surface): MediaCodec {
         val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
             setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
             setInteger(MediaFormat.KEY_OPERATING_RATE, 60) // hints the SoC to keep the video core clocked up
             setInteger(MediaFormat.KEY_PRIORITY, 0) // realtime
         }
-        codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC).apply {
+        return MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC).apply {
             // On `decoderHandler`'s own thread, off the main looper: Compose recomposition and touch
             // dispatch on the main thread would otherwise delay these and cap how fast frames render.
             setCallback(object : MediaCodec.Callback() {
@@ -188,7 +217,7 @@ class Stream(
 
                 override fun onOutputFormatChanged(c: MediaCodec, format: MediaFormat) = Unit
             }, decoderHandler)
-            configure(format, surface, null, 0)
+            configure(format, target, null, 0)
             start()
         }
     }
@@ -197,10 +226,13 @@ class Stream(
         val c = codec ?: return
         // ponytail: drops the frame if the decoder is stalled; can smear until the next keyframe.
         val index = freeInputs.poll(500, TimeUnit.MILLISECONDS) ?: return
-        c.getInputBuffer(index)!!.apply {
-            clear()
-            put(frame)
+        synchronized(lock) {
+            if (codec !== c) return // released meanwhile (surface detached or new CONFIG)
+            c.getInputBuffer(index)!!.apply {
+                clear()
+                put(frame)
+            }
+            c.queueInputBuffer(index, 0, frame.size, System.nanoTime() / 1000, 0)
         }
-        c.queueInputBuffer(index, 0, frame.size, System.nanoTime() / 1000, 0)
     }
 }
