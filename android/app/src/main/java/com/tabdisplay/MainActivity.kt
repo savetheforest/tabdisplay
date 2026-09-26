@@ -103,6 +103,8 @@ class MainActivity : ComponentActivity() {
     private var autoConnect = true
     private var attempts = 0
     private var pendingRetry: Runnable? = null
+    /** The video surface is gone (screen locked / another app in front) while a session is open. */
+    private var backgrounded = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -348,6 +350,7 @@ class MainActivity : ComponentActivity() {
                 val bounds = windowManager.currentWindowMetrics.bounds
                 val (w, h) = decodableSize(bounds.width(), bounds.height())
                 sentSize = w to h
+                backgrounded = false
                 // Coming back from lock / another app: the session is still alive, just give it the new surface.
                 stream?.let { it.attach(holder.surface, w, h); return }
                 SessionService.start(this@MainActivity, target.name)
@@ -386,6 +389,7 @@ class MainActivity : ComponentActivity() {
             }
 
             override fun surfaceDestroyed(holder: SurfaceHolder) {
+                backgrounded = true
                 stream?.detach()
             }
         })
@@ -426,10 +430,13 @@ class MainActivity : ComponentActivity() {
     private fun endSession(reason: String?) {
         stream = null
         SessionService.stop(this)
+        // Say why the list is back when the session died while the screen was locked / the app hidden.
+        val shown = if (reason != null && backgrounded) "A sessão caiu com o app em segundo plano ou a tela bloqueada. $reason" else reason
+        backgrounded = false
         pairing = null
         video = null
         stats = null
-        screen = Screen.Connect(reason)
+        screen = Screen.Connect(shown)
     }
 
     private fun startDiscovery() {
