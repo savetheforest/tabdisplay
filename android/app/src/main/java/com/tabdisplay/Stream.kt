@@ -1,5 +1,6 @@
 package com.tabdisplay
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.media.MediaCodec
 import android.media.MediaFormat
@@ -19,6 +20,11 @@ import java.net.Socket
 import java.net.SocketException
 import java.net.SocketTimeoutException
 import java.nio.ByteBuffer
+import java.security.MessageDigest
+import java.security.cert.X509Certificate
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLSocket
+import javax.net.ssl.X509TrustManager
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -55,6 +61,11 @@ interface StreamEvents {
     fun onStats(shownFps: Int, rttMs: Int, mbps: Double) {}
     /** The quality preset the PC uses now: "performance", "balanced", "quality", "auto" or "custom". */
     fun onProfile(profile: String) {}
+    /**
+     * The PC's TLS certificate (SHA-256 of its DER, hex). Return false to refuse it: the app pins the first
+     * certificate it sees for each PC (trust on first use), so a different one means another machine answered.
+     */
+    fun onServerCertificate(fingerprint: String): Boolean = true
 }
 
 /** One session with the PC: reads video into a MediaCodec rendering to [surface], sends touches back. */
@@ -90,6 +101,7 @@ class Stream(
             audio?.muted = value
         }
     @Volatile private var connected = false
+    @Volatile private var secured = false
     /** Set when the PC explains why it ends the session (ERROR message). */
     @Volatile private var pcReason: String? = null
 
@@ -104,6 +116,8 @@ class Stream(
     }
 
     private fun friendly(e: Exception): String = when {
+        e is SecurityException -> e.message ?: context.getString(R.string.identity_changed)
+        connected && !secured -> context.getString(R.string.tls_failed)
         !connected && (e is SocketTimeoutException || e is ConnectException || e is NoRouteToHostException) ->
             context.getString(R.string.pc_no_response)
         connected && (e is EOFException || e is SocketException) -> context.getString(R.string.connection_dropped)
@@ -157,10 +171,11 @@ class Stream(
         socket.tcpNoDelay = true
         socket.connect(InetSocketAddress(host, PORT), 3000)
         connected = true
-        out = DataOutputStream(BufferedOutputStream(socket.getOutputStream()))
+        val tls = secure()
+        out = DataOutputStream(BufferedOutputStream(tls.getOutputStream()))
         sendJson(HELLO, hello)
 
-        val input = DataInputStream(BufferedInputStream(socket.getInputStream(), 1 shl 16))
+        val input = DataInputStream(BufferedInputStream(tls.getInputStream(), 1 shl 16))
         while (!closed.get()) {
             val type = input.readUnsignedByte()
             val len = input.readInt()
@@ -189,6 +204,27 @@ class Stream(
     private fun playAudio(packet: ByteArray) {
         if (audio == null) audio = runCatching { Audio() }.getOrNull()?.also { it.muted = muted } ?: return
         runCatching { audio!!.play(packet) }
+    }
+
+    /** TLS 1.3 over the connected socket, before anything (the pairing token!) is sent. */
+    @SuppressLint("CustomX509TrustManager", "TrustAllX509TrustManager")
+    private fun secure(): SSLSocket {
+        // Any certificate is accepted by the handshake itself; identity is decided by the pin below.
+        val anyCert = object : X509TrustManager {
+            override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) = Unit
+            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) = Unit
+            override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
+        }
+        val ssl = SSLContext.getInstance("TLSv1.3").apply { init(null, arrayOf(anyCert), null) }
+            .socketFactory.createSocket(socket, host, PORT, true) as SSLSocket
+        ssl.soTimeout = 5000 // a PC that doesn't speak TLS (older version) just stays silent
+        ssl.startHandshake()
+        ssl.soTimeout = 0
+        val cert = ssl.session.peerCertificates[0].encoded
+        val fingerprint = MessageDigest.getInstance("SHA-256").digest(cert).joinToString("") { "%02x".format(it) }
+        if (!events.onServerCertificate(fingerprint)) throw SecurityException(context.getString(R.string.identity_changed))
+        secured = true
+        return ssl
     }
 
     private fun json(payload: ByteArray) = JSONObject(String(payload, Charsets.UTF_8))

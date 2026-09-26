@@ -388,7 +388,7 @@ class MainActivity : ComponentActivity() {
                 stream?.let { it.attach(holder.surface, w, h); return }
                 SessionService.start(this@MainActivity, target.name)
                 val hello = JSONObject()
-                    .put("v", 2)
+                    .put("v", 3)
                     .put("device_id", deviceId)
                     .put("device_name", deviceName)
                     .put("token", target.pcId?.let { prefs.getString("token_$it", null) } ?: "")
@@ -403,6 +403,16 @@ class MainActivity : ComponentActivity() {
                     override fun onPairRequired(pcName: String, wrong: Boolean) = runOnUiThread { pairing = PairRequest(pcName, wrong) }
                     override fun onPaired(pcId: String, token: String) {
                         prefs.edit().putString("token_$pcId", token).putString("pc_at_${target.host}", pcId).apply()
+                    }
+                    // Trust on first use: pin the PC's certificate; a different one later means another machine answered.
+                    override fun onServerCertificate(fingerprint: String): Boolean {
+                        val key = "pin_" + (target.pcId ?: target.host)
+                        val pinned = prefs.getString(key, null)
+                        if (pinned == null) prefs.edit().putString(key, fingerprint).apply()
+                        if (pinned == null || pinned == fingerprint) return true
+                        // Forget the PC so the next attempt pairs (and pins) again, with the code shown on the PC.
+                        prefs.edit().remove(key).apply { target.pcId?.let { remove("token_$it") } }.apply()
+                        return false
                     }
                     override fun onProfile(profile: String) = runOnUiThread { this@MainActivity.profile = profile }
                     override fun onStats(shownFps: Int, rttMs: Int, mbps: Double) = runOnUiThread {
