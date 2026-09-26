@@ -32,6 +32,8 @@ pub const STATS_MSG: u8 = 12;
 const MAX_MSG: usize = 16 << 20;
 
 pub static STATUS: Mutex<String> = Mutex::new(String::new());
+/// "Redmi Pad 2 · USB" while a tablet is connected.
+pub static SESSION: Mutex<Option<String>> = Mutex::new(None);
 
 fn set_status(s: impl Into<String>) {
     let s = s.into();
@@ -161,7 +163,9 @@ fn handle(mut stream: TcpStream) -> io::Result<()> {
     if !usb && !pairing::is_paired(&hello.device_id, &hello.token) {
         pair(&mut stream, &hello).inspect_err(|_| pairing::cancel())?;
     }
-    set_status(format!("Conectado: {} ({})", hello.device_name, if usb { "USB" } else { "Wi‑Fi" }));
+    let session = format!("{} · {}", hello.device_name, if usb { "USB" } else { "Wi‑Fi" });
+    set_status(format!("Conectado: {session}"));
+    *SESSION.lock().unwrap() = Some(session);
 
     let shared = Arc::new(Shared {
         start: Instant::now(),
@@ -215,6 +219,7 @@ fn handle(mut stream: TcpStream) -> io::Result<()> {
         result = stream_once(&mut stream, &shared, &mut virtual_display);
     }
     *STATS.lock().unwrap() = None;
+    *SESSION.lock().unwrap() = None;
     drop(virtual_display);
     let _ = stream.shutdown(Shutdown::Both);
     result
@@ -234,6 +239,7 @@ fn plan(s: &Settings, tablet: (u32, u32)) -> ((u32, u32), u32, u32) {
 fn pair(stream: &mut TcpStream, hello: &Hello) -> io::Result<()> {
     set_status(format!("Pareando com {}", hello.device_name));
     pairing::start(&hello.device_name);
+    crate::show_window(); // the code is on the PC screen; the window may be in the tray
     let ask = |wrong: bool| json!({ "pc_id": pairing::pc_id(), "pc_name": computer_name(), "wrong": wrong });
     send_json(stream, PAIR_REQUIRED, &ask(false))?;
     stream.set_read_timeout(Some(Duration::from_secs(180)))?;
@@ -318,7 +324,7 @@ fn stream_once(stream: &mut TcpStream, shared: &Shared, virtual_display: &mut Op
                 break;
             }
             let secs = tick.elapsed().as_secs_f32();
-            *STATS.lock().unwrap() = Some(Stats {
+            let stats = Stats {
                 width: cw,
                 height: ch,
                 fps: frames as f32 / secs,
@@ -326,8 +332,11 @@ fn stream_once(stream: &mut TcpStream, shared: &Shared, virtual_display: &mut Op
                 encode_ms: if frames > 0 { encode_time.as_secs_f32() * 1000.0 / frames as f32 } else { 0.0 },
                 rtt_ms: shared.rtt_ms.load(Ordering::Relaxed),
                 tablet_fps: shared.tablet_fps.load(Ordering::Relaxed),
-            });
-            send_json(stream, PING, &json!({ "t": shared.start.elapsed().as_millis() as u64 }))?;
+            };
+            // The tablet echoes `t` (round trip) and may show the rest in its stats overlay.
+            let ping = json!({ "t": shared.start.elapsed().as_millis() as u64, "rtt_ms": stats.rtt_ms, "fps": stats.fps.round(), "mbps": stats.mbps });
+            *STATS.lock().unwrap() = Some(stats);
+            send_json(stream, PING, &ping)?;
             (tick, frames, bytes, encode_time) = (Instant::now(), 0, 0, Duration::ZERO);
         }
         let wait = interval.saturating_sub(last.elapsed()).as_millis().max(1) as u32;

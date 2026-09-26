@@ -11,8 +11,12 @@
     "windows": [
       {
         "title": "TabDisplay",
-        "width": 460,
-        "height": 620
+        "width": 940,
+        "height": 660,
+        "minWidth": 760,
+        "minHeight": 520,
+        "transparent": true,
+        "center": true
       }
     ],
     "security": {

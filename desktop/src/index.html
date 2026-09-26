@@ -3,87 +3,225 @@
   <head>
     <meta charset="UTF-8" />
     <title>TabDisplay</title>
-    <style>
-      :root {
-        color-scheme: light dark;
-        font: 14px system-ui, sans-serif;
-        --muted: #888;
-        --line: #8884;
-      }
-      body { margin: 0; padding: 16px 20px; }
-      #status { font-weight: 600; margin: 0 0 4px; }
-      .muted { color: var(--muted); margin: 0 0 12px; }
-      fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 0 0 12px; padding: 8px 12px 12px; }
-      legend { color: var(--muted); padding: 0 4px; }
-      label { display: grid; grid-template-columns: 110px 1fr; align-items: center; gap: 8px; margin-top: 8px; }
-      select, input[type="range"] { width: 100%; font: inherit; }
-      button { font: inherit; padding: 6px 12px; }
-      code { font-size: 15px; }
-      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-      [hidden] { display: none !important; }
-    </style>
+    <link rel="stylesheet" href="styles.css" />
     <script type="module" src="/main.js" defer></script>
   </head>
   <body>
-    <p id="status">…</p>
-    <p class="muted">Wi‑Fi: o tablet encontra este PC sozinho (IP <code id="ip">…</code>)</p>
+    <svg width="0" height="0" style="position: absolute" aria-hidden="true">
+      <symbol id="i-logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="2" y="5" width="13" height="10" rx="1.5"/><rect x="12" y="8" width="10" height="13" rx="1.5" fill="currentColor" fill-opacity=".15"/></symbol>
+      <symbol id="i-home" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2.5 7 8 2.5 13.5 7v6.5h-3.5V10H6v3.5H2.5z"/></symbol>
+      <symbol id="i-display" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="1.5" y="2.5" width="13" height="9" rx="1"/><path d="M5.5 14h5M8 11.5V14"/></symbol>
+      <symbol id="i-touch" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M6.5 9V3.2a1.2 1.2 0 0 1 2.4 0V8l3 .7a1.6 1.6 0 0 1 1.2 1.9l-.8 3.9H7.2L4.4 10.4a1.1 1.1 0 0 1 1.6-1.5z"/></symbol>
+      <symbol id="i-devices" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="1.5" y="3.5" width="9" height="7" rx="1"/><rect x="9.5" y="6.5" width="5" height="7.5" rx="1"/></symbol>
+      <symbol id="i-settings" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M3.4 12.6l1.4-1.4M11.2 4.8l1.4-1.4"/></symbol>
+      <symbol id="i-ok" viewBox="0 0 16 16"><circle cx="8" cy="8" r="7" fill="currentColor"/><path d="m5 8.2 2 2 4-4.2" fill="none" stroke="#fff" stroke-width="1.6"/></symbol>
+      <symbol id="i-wait" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="8" cy="8" r="6.3"/><path d="M8 4.5V8l2.2 1.6"/></symbol>
+      <symbol id="i-warn" viewBox="0 0 16 16"><path d="M8 1.5 15 14H1z" fill="currentColor"/><path d="M8 6v4M8 11.5v1" stroke="#000" stroke-width="1.4"/></symbol>
+      <symbol id="i-wifi" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M2 7.5a11 11 0 0 1 16 0M4.8 10.6a7 7 0 0 1 10.4 0M7.6 13.6a3 3 0 0 1 4.8 0"/><circle cx="10" cy="16.2" r="1" fill="currentColor"/></symbol>
+      <symbol id="i-usb" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M10 2v13M10 15a2 2 0 1 0 0 3 2 2 0 0 0 0-3M10 11l-4-2.5V6.5M10 9l4-2.5V5"/><rect x="5" y="4.5" width="2" height="2"/><circle cx="14" cy="4.5" r="1"/></symbol>
+      <symbol id="i-pen" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><path d="m13.5 3.5 3 3L7 16H4v-3z"/></symbol>
+      <symbol id="i-quality" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M3 15h14M5 15V9M9 15V6M13 15v-4M17 15V4"/></symbol>
+      <symbol id="i-position" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="5" width="9" height="7" rx="1"/><rect x="12" y="7" width="6" height="8" rx="1"/></symbol>
+      <symbol id="i-chip" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="5" y="5" width="10" height="10" rx="1.5"/><path d="M8 2v3M12 2v3M8 15v3M12 15v3M2 8h3M2 12h3M15 8h3M15 12h3"/></symbol>
+      <symbol id="i-power" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M10 2.5V9M6 5a6.5 6.5 0 1 0 8 0"/></symbol>
+      <symbol id="i-monitor" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="3" width="16" height="11" rx="1"/><path d="M7 17.5h6M10 14v3.5"/></symbol>
+      <symbol id="i-phone" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="4" y="2" width="12" height="16" rx="1.5"/><path d="M9 15.5h2"/></symbol>
+    </svg>
 
-    <fieldset>
-      <legend>Conexão</legend>
-      <p id="usb" class="muted">Cabo USB: nenhum tablet (precisa da depuração USB ligada)</p>
-      <div class="row">
-        <button id="install">Instalar app no tablet</button>
-        <span id="msg" class="muted"></span>
-      </div>
-    </fieldset>
+    <nav aria-label="Seções">
+      <div class="brand"><svg><use href="#i-logo" /></svg>TabDisplay</div>
+      <button data-page="home" aria-current="page"><svg><use href="#i-home" /></svg>Início</button>
+      <button data-page="display"><svg><use href="#i-display" /></svg>Tela</button>
+      <button data-page="input"><svg><use href="#i-touch" /></svg>Toque e caneta</button>
+      <button data-page="devices"><svg><use href="#i-devices" /></svg>Aparelhos</button>
+      <button data-page="advanced"><svg><use href="#i-settings" /></svg>Avançado</button>
+      <div class="spacer"></div>
+      <div class="version" id="version"></div>
+    </nav>
 
-    <fieldset id="form">
-      <legend>Tela</legend>
-      <label>Modo
-        <select id="mode">
-          <option value="extend">Estender (2º monitor)</option>
-          <option value="mirror">Espelhar</option>
-        </select>
-      </label>
-      <label data-for="extend">Resolução
-        <select id="resolution"></select>
-      </label>
-      <label data-for="extend">Posição
-        <select id="position">
-          <option value="right">À direita</option>
-          <option value="left">À esquerda</option>
-          <option value="above">Acima</option>
-          <option value="below">Abaixo</option>
-        </select>
-      </label>
-      <label data-for="mirror">Monitor
-        <select id="mirror_monitor"></select>
-      </label>
-      <label>FPS
-        <select id="fps">
-          <option>30</option>
-          <option>60</option>
-          <option>90</option>
-          <option>120</option>
-        </select>
-      </label>
-      <label>Bitrate <span class="row"><input id="bitrate_mbps" type="range" min="5" max="60" step="5" /><span id="bitrate_label"></span></span></label>
-      <label>Encoder
-        <select id="encoder">
-          <option value="auto">Automático</option>
-          <option value="gpu">GPU</option>
-          <option value="cpu">CPU</option>
-        </select>
-      </label>
-      <label>Toque <span><input id="touch" type="checkbox" /> controla o mouse</span></label>
-    </fieldset>
+    <main>
+      <!-- Início -->
+      <section id="page-home">
+        <h1>Início</h1>
+        <div class="card hero" id="hero">
+          <div class="device"></div>
+          <div>
+            <div class="title" id="hero-title">Aguardando tablet</div>
+            <div class="badge" id="hero-badge"><svg><use href="#i-wait" /></svg><span id="hero-detail">Abra o TabDisplay no tablet</span></div>
+          </div>
+        </div>
 
-    <fieldset>
-      <legend>Monitor virtual</legend>
-      <div class="row">
-        <span id="driver"></span>
-        <button id="restart">Reiniciar driver</button>
-      </div>
-    </fieldset>
+        <div class="tiles" id="tiles" hidden>
+          <div class="card tile"><div class="k">Resolução</div><div class="v" id="t-res">–</div><div class="s" id="t-res-s">&nbsp;</div></div>
+          <div class="card tile"><div class="k">Quadros por segundo</div><div class="v" id="t-fps">–</div><div class="s" id="t-fps-s">&nbsp;</div></div>
+          <div class="card tile"><div class="k">Latência (ida e volta)</div><div class="v" id="t-rtt">–</div><div class="s">rede</div></div>
+          <div class="card tile"><div class="k">Taxa de dados</div><div class="v" id="t-mbps">–</div><div class="s" id="t-enc">&nbsp;</div></div>
+        </div>
+
+        <h2>Como usar</h2>
+        <div class="card rows">
+          <div class="row">
+            <svg class="icon"><use href="#i-display" /></svg>
+            <div class="label"><span class="title">Modo</span><span class="desc">Estender cria um segundo monitor; espelhar repete uma tela</span></div>
+            <div class="seg" data-setting="mode">
+              <button data-value="extend">Estender</button>
+              <button data-value="mirror">Espelhar</button>
+            </div>
+          </div>
+          <div class="row">
+            <svg class="icon"><use href="#i-quality" /></svg>
+            <div class="label"><span class="title">Qualidade</span><span class="desc" id="profile-desc"></span></div>
+            <div class="seg" data-setting="profile">
+              <button data-value="performance">Desempenho</button>
+              <button data-value="balanced">Equilibrado</button>
+              <button data-value="quality">Qualidade</button>
+            </div>
+          </div>
+          <div class="row">
+            <svg class="icon"><use href="#i-wifi" /></svg>
+            <div class="label"><span class="title">Wi‑Fi</span><span class="desc" id="wifi-desc">No tablet, toque no nome deste PC</span></div>
+          </div>
+          <div class="row">
+            <svg class="icon"><use href="#i-usb" /></svg>
+            <div class="label"><span class="title">Cabo USB</span><span class="desc" id="usb-desc"></span></div>
+            <button class="btn" id="install">Instalar app no tablet</button>
+          </div>
+        </div>
+        <p class="muted small" id="install-msg"></p>
+      </section>
+
+      <!-- Tela -->
+      <section id="page-display" hidden>
+        <h1>Tela</h1>
+        <div class="card rows">
+          <div class="row">
+            <svg class="icon"><use href="#i-display" /></svg>
+            <div class="label"><span class="title">Modo</span></div>
+            <div class="seg" data-setting="mode">
+              <button data-value="extend">Estender</button>
+              <button data-value="mirror">Espelhar</button>
+            </div>
+          </div>
+          <div class="row" data-show="extend">
+            <svg class="icon"><use href="#i-position" /></svg>
+            <div class="label"><span class="title">Posição do tablet</span><span class="desc">Em relação ao monitor principal</span></div>
+            <select data-setting="position">
+              <option value="right">À direita</option>
+              <option value="left">À esquerda</option>
+              <option value="above">Acima</option>
+              <option value="below">Abaixo</option>
+            </select>
+          </div>
+          <div class="row" data-show="mirror">
+            <svg class="icon"><use href="#i-monitor" /></svg>
+            <div class="label"><span class="title">Monitor espelhado</span></div>
+            <select data-setting="mirror_monitor" id="mirror-monitor"></select>
+          </div>
+        </div>
+
+        <h2>Qualidade</h2>
+        <div class="card rows">
+          <div class="row">
+            <svg class="icon"><use href="#i-quality" /></svg>
+            <div class="label"><span class="title">Perfil</span><span class="desc" id="profile-desc-2"></span></div>
+            <select data-setting="profile">
+              <option value="performance">Desempenho</option>
+              <option value="balanced">Equilibrado</option>
+              <option value="quality">Qualidade</option>
+              <option value="custom">Personalizado</option>
+            </select>
+          </div>
+          <div class="row" data-show="custom">
+            <div class="icon"></div>
+            <div class="label"><span class="title">Resolução</span><span class="desc">Maior que o tablet aguenta é reduzida mantendo a proporção</span></div>
+            <select data-setting="resolution" id="resolution"></select>
+          </div>
+          <div class="row" data-show="custom">
+            <div class="icon"></div>
+            <div class="label"><span class="title">Quadros por segundo</span></div>
+            <div class="seg" data-setting="fps" data-number>
+              <button data-value="30">30</button>
+              <button data-value="60">60</button>
+              <button data-value="90">90</button>
+              <button data-value="120">120</button>
+            </div>
+          </div>
+          <div class="row" data-show="custom">
+            <div class="icon"></div>
+            <div class="label"><span class="title">Taxa de dados</span><span class="desc">Mais é mais nítido, mas pesa no Wi‑Fi</span></div>
+            <div class="range"><input type="range" min="5" max="60" step="5" data-setting="bitrate_mbps" /><output id="bitrate-out"></output></div>
+          </div>
+          <div class="row">
+            <svg class="icon"><use href="#i-chip" /></svg>
+            <div class="label"><span class="title">Codificador de vídeo</span><span class="desc">Placa de vídeo é mais rápido; processador é a reserva</span></div>
+            <select data-setting="encoder">
+              <option value="auto">Automático</option>
+              <option value="gpu">Placa de vídeo</option>
+              <option value="cpu">Processador</option>
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <!-- Toque e caneta -->
+      <section id="page-input" hidden>
+        <h1>Toque e caneta</h1>
+        <div class="card rows">
+          <div class="row">
+            <svg class="icon"><use href="#i-touch" /></svg>
+            <div class="label"><span class="title">Controlar o PC pelo tablet</span><span class="desc">Toques e caneta viram entrada no monitor do tablet</span></div>
+            <label class="switch"><span id="touch-state"></span><input type="checkbox" data-setting="touch" /></label>
+          </div>
+          <div class="row" data-show="touch">
+            <div class="icon"></div>
+            <div class="label">
+              <span class="title">O dedo age como</span>
+              <span class="desc">Toque do Windows: rolar com dois dedos, pinçar para zoom, segurar para clique direito. Mouse: para apps que ignoram toque.</span>
+            </div>
+            <div class="seg" data-setting="touch_mode">
+              <button data-value="native">Toque do Windows</button>
+              <button data-value="mouse">Mouse</button>
+            </div>
+          </div>
+          <div class="row" data-show="touch">
+            <svg class="icon"><use href="#i-pen" /></svg>
+            <div class="label"><span class="title">Caneta</span><span class="desc">Sempre funciona como caneta do Windows, com pressão, inclinação, botão e borracha</span></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Aparelhos -->
+      <section id="page-devices" hidden>
+        <h1>Aparelhos</h1>
+        <p class="muted">Tablets que já parearam pelo Wi‑Fi conectam sem código. Pelo cabo USB não é preciso parear.</p>
+        <div class="card rows" id="paired"></div>
+      </section>
+
+      <!-- Avançado -->
+      <section id="page-advanced" hidden>
+        <h1>Avançado</h1>
+        <div class="card rows">
+          <div class="row">
+            <svg class="icon"><use href="#i-power" /></svg>
+            <div class="label"><span class="title">Iniciar com o Windows</span><span class="desc">Abre minimizado na bandeja, pronto para o tablet</span></div>
+            <label class="switch"><span id="autostart-state"></span><input type="checkbox" id="autostart" /></label>
+          </div>
+          <div class="row">
+            <svg class="icon"><use href="#i-monitor" /></svg>
+            <div class="label"><span class="title">Monitor virtual</span><span class="desc" id="driver-desc"></span></div>
+            <button class="btn" id="restart">Reiniciar</button>
+          </div>
+        </div>
+        <p class="muted small">Fechar a janela deixa o TabDisplay na bandeja. Para sair de vez, use “Sair” no ícone da bandeja.</p>
+      </section>
+    </main>
+
+    <dialog id="pair-dialog">
+      <h3>Parear tablet</h3>
+      <div class="muted" id="pair-device"></div>
+      <div class="code" id="pair-code">······</div>
+      <p class="muted small">Digite este código no tablet. Ele vale por 2 minutos e só é pedido na primeira vez.</p>
+      <div class="actions"><button class="btn" id="pair-close">Fechar</button></div>
+    </dialog>
   </body>
 </html>

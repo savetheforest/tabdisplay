@@ -18,7 +18,11 @@ use std::net::UdpSocket;
 use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::window::{Effect, EffectsBuilder};
 use tauri::Manager;
+use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use win::{capture, display, driver, service};
 
 pub use win::driver::cli as driver_cli;
@@ -43,6 +47,7 @@ fn status() -> serde_json::Value {
         "usb": *USB.lock().unwrap(),
         "pairing": pairing,
         "stats": server::STATS.lock().unwrap().clone(),
+        "session": server::SESSION.lock().unwrap().clone(),
     })
 }
 
@@ -63,6 +68,7 @@ fn get_settings() -> Settings {
 
 #[tauri::command]
 fn set_settings(settings: Settings) {
+    sync_tray(settings.mode);
     settings::set(settings);
 }
 
@@ -103,7 +109,7 @@ fn usb_forward() {
     let port = format!("tcp:{}", server::PORT);
     loop {
         let ok = adb(&["reverse", &port, &port]).is_ok_and(|o| o.status.success());
-        *USB.lock().unwrap() = if ok { "Cabo USB: tablet pronto (toque em USB no tablet)" } else { "" };
+        *USB.lock().unwrap() = if ok { "Tablet conectado pelo cabo: toque em \"PC pelo cabo USB\" no tablet." } else { "" };
         std::thread::sleep(Duration::from_secs(3));
     }
 }
@@ -119,26 +125,129 @@ async fn install_apk() -> String {
     }
 }
 
+static APP: OnceLock<tauri::AppHandle> = OnceLock::new();
+/// The tray's Extend/Mirror checks, kept in sync with the settings.
+static TRAY_MODE: OnceLock<(CheckMenuItem<tauri::Wry>, CheckMenuItem<tauri::Wry>)> = OnceLock::new();
+
+/// Brings the window up: tray click, a second launch, or a tablet asking to pair (to show the code).
+pub fn show_window() {
+    if let Some(w) = APP.get().and_then(|a| a.get_webview_window("main")) {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
+
+fn sync_tray(mode: settings::Mode) {
+    if let Some((extend, mirror)) = TRAY_MODE.get() {
+        let _ = extend.set_checked(mode == settings::Mode::Extend);
+        let _ = mirror.set_checked(mode == settings::Mode::Mirror);
+    }
+}
+
+fn tray(app: &tauri::App) -> tauri::Result<()> {
+    let mode = settings::get().mode;
+    let open = MenuItem::with_id(app, "open", "Abrir TabDisplay", true, None::<&str>)?;
+    let extend = CheckMenuItem::with_id(app, "extend", "Estender (2º monitor)", true, mode == settings::Mode::Extend, None::<&str>)?;
+    let mirror = CheckMenuItem::with_id(app, "mirror", "Espelhar", true, mode == settings::Mode::Mirror, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Sair", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open, &PredefinedMenuItem::separator(app)?, &extend, &mirror, &PredefinedMenuItem::separator(app)?, &quit])?;
+    let _ = TRAY_MODE.set((extend, mirror));
+    TrayIconBuilder::with_id("tray")
+        .icon(app.default_window_icon().cloned().expect("app icon"))
+        .tooltip("TabDisplay")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "open" => show_window(),
+            id @ ("extend" | "mirror") => {
+                let mut s = settings::get();
+                s.mode = if id == "extend" { settings::Mode::Extend } else { settings::Mode::Mirror };
+                sync_tray(s.mode);
+                settings::set(s);
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|_, event| {
+            if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
+                show_window();
+            }
+        })
+        .build(app)?;
+    Ok(())
+}
+
+/// Mica needs Windows 11 (build 22000+); on Windows 10 a transparent window would just be see-through.
+fn supports_mica() -> bool {
+    let mut v = windows::Win32::System::SystemInformation::OSVERSIONINFOW {
+        dwOSVersionInfoSize: size_of::<windows::Win32::System::SystemInformation::OSVERSIONINFOW>() as u32,
+        ..Default::default()
+    };
+    unsafe { windows::Wdk::System::SystemServices::RtlGetVersion(&mut v) }.is_ok() && v.dwBuildNumber >= 22000
+}
+
+/// Look-and-feel facts the UI needs once.
+#[tauri::command]
+fn ui_info(app: tauri::AppHandle) -> serde_json::Value {
+    serde_json::json!({
+        "mica": supports_mica(),
+        "version": app.package_info().version.to_string(),
+        "autostart": app.autolaunch().is_enabled().unwrap_or(false),
+    })
+}
+
+#[tauri::command]
+fn set_autostart(app: tauri::AppHandle, on: bool) -> bool {
+    let launcher = app.autolaunch();
+    let _ = if on { launcher.enable() } else { launcher.disable() };
+    launcher.is_enabled().unwrap_or(false)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         // A second launch (Start menu, autostart) focuses the running window instead of fighting for port 7070.
-        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.show();
-                let _ = w.unminimize();
-                let _ = w.set_focus();
-            }
-        }))
+        .plugin(tauri_plugin_single_instance::init(|_, _, _| show_window()))
+        // Started with Windows: come up in the tray, not in the user's face.
+        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--minimized"])))
         .setup(|app| {
+            let _ = APP.set(app.handle().clone());
             settings::init(app.path().app_config_dir()?);
             pairing::init(app.path().app_config_dir()?);
+            tray(app)?;
+            if let Some(window) = app.get_webview_window("main") {
+                if supports_mica() {
+                    let _ = window.set_effects(EffectsBuilder::new().effect(Effect::Mica).build());
+                }
+                if std::env::args().any(|a| a == "--minimized") {
+                    let _ = window.hide();
+                }
+            }
             std::thread::spawn(server::run);
             std::thread::spawn(server::beacon);
             std::thread::spawn(usb_forward);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![status, get_settings, set_settings, options, restart_driver, install_apk, paired_devices, forget_device])
+        // Closing the window keeps TabDisplay running in the tray; "Sair" in the tray quits.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                let _ = window.hide();
+            }
+        })
+        .invoke_handler(tauri::generate_handler![
+            status,
+            get_settings,
+            set_settings,
+            options,
+            restart_driver,
+            install_apk,
+            paired_devices,
+            forget_device,
+            ui_info,
+            set_autostart
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

@@ -45,6 +45,8 @@ interface StreamEvents {
     fun onPairRequired(pcName: String, wrong: Boolean)
     fun onPaired(pcId: String, token: String)
     fun onClose(reason: String)
+    /** Once a second: frames this tablet showed, round trip and data rate (as measured by the PC). */
+    fun onStats(shownFps: Int, rttMs: Int, mbps: Double) {}
 }
 
 /** One session with the PC: reads video into a MediaCodec rendering to [surface], sends touches back. */
@@ -122,8 +124,11 @@ class Stream(
                 PAIRED -> json(payload).let { events.onPaired(it.getString("pc_id"), it.getString("token")) }
                 ERROR -> pcReason = json(payload).optString("message", "O PC recusou a conexão.")
                 PING -> {
-                    sendJson(PONG, json(payload)) // echo: the PC measures the round trip
-                    sendJson(STATS, JSONObject().put("fps", rendered.getAndSet(0)))
+                    val ping = json(payload)
+                    val shown = rendered.getAndSet(0)
+                    sendJson(PONG, JSONObject().put("t", ping.getLong("t"))) // echo: the PC measures the round trip
+                    sendJson(STATS, JSONObject().put("fps", shown))
+                    events.onStats(shown, ping.optInt("rtt_ms"), ping.optDouble("mbps"))
                 }
             }
         }
