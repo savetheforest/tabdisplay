@@ -2,6 +2,8 @@ package com.tabdisplay
 
 import android.media.MediaCodec
 import android.media.MediaFormat
+import android.os.Handler
+import android.os.HandlerThread
 import android.view.Surface
 import org.json.JSONObject
 import java.io.BufferedInputStream
@@ -60,6 +62,10 @@ class Stream(
     private val sender = Executors.newSingleThreadExecutor()
     private val closed = AtomicBoolean(false)
     private val freeInputs = LinkedBlockingQueue<Int>()
+    // The decoder's callbacks need their own Looper; without one Android delivers them on the main
+    // thread, where they'd compete with Compose recomposition and touch dispatch for time and cap fps.
+    private val decoderThread = HandlerThread("decoder").apply { start() }
+    private val decoderHandler = Handler(decoderThread.looper)
     private lateinit var out: DataOutputStream
     @Volatile private var codec: MediaCodec? = null
     /** Frames shown since the last PING (the PC pings once a second, so this is fps). */
@@ -92,6 +98,7 @@ class Stream(
         sender.shutdownNow()
         codec?.let { runCatching { it.stop(); it.release() } }
         codec = null
+        decoderThread.quitSafely()
         return true
     }
 
@@ -159,9 +166,12 @@ class Stream(
         freeInputs.clear()
         val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
             setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+            setInteger(MediaFormat.KEY_OPERATING_RATE, 60) // hints the SoC to keep the video core clocked up
+            setInteger(MediaFormat.KEY_PRIORITY, 0) // realtime
         }
         codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC).apply {
-            // Callbacks run on the main looper (this thread has none).
+            // On `decoderHandler`'s own thread, off the main looper: Compose recomposition and touch
+            // dispatch on the main thread would otherwise delay these and cap how fast frames render.
             setCallback(object : MediaCodec.Callback() {
                 override fun onInputBufferAvailable(c: MediaCodec, index: Int) {
                     freeInputs.put(index)
@@ -177,7 +187,7 @@ class Stream(
                 }
 
                 override fun onOutputFormatChanged(c: MediaCodec, format: MediaFormat) = Unit
-            })
+            }, decoderHandler)
             configure(format, surface, null, 0)
             start()
         }

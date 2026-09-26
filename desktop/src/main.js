@@ -120,7 +120,7 @@ async function refresh() {
     $("t-fps-s").textContent = `tablet exibe ${t.tablet_fps}`;
     $("t-rtt").textContent = `${t.rtt_ms} ms`;
     $("t-mbps").textContent = `${t.mbps.toFixed(1)} Mbps`;
-    $("t-enc").textContent = `codificação ${t.encode_ms.toFixed(1)} ms`;
+    $("t-enc").textContent = `codificação ${t.encode_ms.toFixed(1)} ms · ${t.encoder_kind === "GPU" ? "placa de vídeo" : "processador"}`;
   }
 
   $("wifi-desc").textContent = `No tablet, toque em “${s.name}” (${s.ip}).`;
