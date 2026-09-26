@@ -1,7 +1,6 @@
 name: CI
+# Na main quem compila √© o build.yml (que tamb√©m roda os testes); aqui s√≥ os pull requests.
 on:
-  push:
-    branches: [main]
   pull_request:
 
 jobs:
@@ -20,11 +19,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri
-      - name: Placeholders dos resources (baixados sÛ no release)
+      - name: Placeholders dos resources (baixados s√≥ no release)
         shell: bash
         run: mkdir -p resources/adb resources/vdd && touch resources/adb/x resources/vdd/x resources/tabdisplay.apk
       - run: cargo check --locked
-      # macOS: o bin·rio de teste n„o acha libswift_Concurrency no runner; sÛ compila l·.
+      # macOS: o bin√°rio de teste n√£o acha libswift_Concurrency no runner; s√≥ compila l√°.
       - run: cargo test --locked
         if: runner.os == 'Windows'
 

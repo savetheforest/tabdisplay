@@ -1,0 +1,187 @@
+name: Build
+
+# A cada merge na main (ou manualmente): gera o APK/AAB do Android e o instalador do Windows e do Mac.
+# Os arquivos ficam como artefatos da execução (Actions > a execução > Artifacts, guardados por 30 dias).
+#
+# Segredos opcionais (Settings > Secrets and variables > Actions). Sem eles o build sai igual, só que sem
+# assinatura / sem relatório de erros:
+#   ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD   (base64 -w0 android-release.jks)
+#   WINDOWS_CERT_PFX_BASE64, WINDOWS_CERT_PASSWORD                                                  (certificado de code signing)
+#   APPLE_CERTIFICATE (.p12 em base64), APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY, APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID
+#   TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD                                   (pacotes do atualizador)
+#   SENTRY_DSN                                                                                      (relatório de erros)
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - run: chmod +x gradlew
+      - name: Keystore de release (se houver)
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE" ]; then
+            echo "$KEYSTORE" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "TABDISPLAY_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+            echo "TABDISPLAY_KEYSTORE_PASSWORD=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}" >> "$GITHUB_ENV"
+            echo "TABDISPLAY_KEY_ALIAS=${{ secrets.ANDROID_KEY_ALIAS }}" >> "$GITHUB_ENV"
+            echo "TABDISPLAY_KEY_PASSWORD=${{ secrets.ANDROID_KEY_PASSWORD }}" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Sem keystore de release nos secrets: o APK sai assinado com a chave de debug do runner (serve para testar, não para atualizar um app instalado)."
+          fi
+      - name: APK e AAB de release
+        env:
+          TABDISPLAY_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+        run: ./gradlew assembleRelease bundleRelease
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tabdisplay-android
+          path: |
+            android/app/build/outputs/apk/release/app-release.apk
+            android/app/build/outputs/bundle/release/app-release.aab
+          retention-days: 30
+
+  windows:
+    needs: android
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: tabdisplay-android
+          path: android-out
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: adb e driver de monitor virtual
+        shell: pwsh
+        run: |
+          Invoke-WebRequest https://dl.google.com/android/repository/platform-tools-latest-windows.zip -OutFile pt.zip
+          Expand-Archive pt.zip -DestinationPath pt
+          # Virtual Display Driver 25.7.23 (driver já assinado pela Microsoft), com o hash fixado.
+          Invoke-WebRequest https://github.com/VirtualDrivers/Virtual-Display-Driver/releases/download/25.7.23/VirtualDisplayDriver-x86.Driver.Only.zip -OutFile vdd.zip
+          if ((Get-FileHash vdd.zip -Algorithm SHA256).Hash -ne 'E24210692B442B39AF763536330CE78B423F19342B7A7792C26DE3944E418B3A') { throw 'hash do driver não confere' }
+          Expand-Archive vdd.zip -DestinationPath vdd
+          ./scripts/prepare-resources.ps1 -AdbDir "$PWD/pt/platform-tools" -VddDir "$PWD/vdd/VirtualDisplayDriver" -Apk "$PWD/android-out/apk/release/app-release.apk"
+      - name: Testes
+        working-directory: desktop/src-tauri
+        run: cargo test --locked
+      - run: npm ci
+        working-directory: desktop
+      - name: Certificado de assinatura (se houver)
+        shell: bash
+        env:
+          PFX: ${{ secrets.WINDOWS_CERT_PFX_BASE64 }}
+        run: |
+          if [ -n "$PFX" ]; then
+            echo "$PFX" | base64 -d > "$RUNNER_TEMP/cert.pfx"
+            echo "TABDISPLAY_SIGN_PFX=$RUNNER_TEMP/cert.pfx" >> "$GITHUB_ENV"
+            echo "TABDISPLAY_SIGN_PFX_PASSWORD=${{ secrets.WINDOWS_CERT_PASSWORD }}" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Sem certificado de code signing nos secrets: o instalador sai sem assinatura."
+          fi
+      - name: Instalador (NSIS)
+        shell: bash
+        working-directory: desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TABDISPLAY_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+        run: |
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            npx tauri build --config src-tauri/tauri.release.conf.json
+          else
+            npx tauri build
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tabdisplay-windows
+          path: |
+            desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
+            desktop/src-tauri/target/release/bundle/nsis/*-setup.exe.sig
+          retention-days: 30
+
+  macos:
+    needs: android
+    runs-on: macos-latest # Apple Silicon (o app é só para Apple Silicon, macOS 14+)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: tabdisplay-android
+          path: android-out
+      - name: APK embutido no app
+        run: |
+          mkdir -p desktop/src-tauri/resources
+          cp android-out/apk/release/app-release.apk desktop/src-tauri/resources/tabdisplay.apk
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+        working-directory: desktop
+      - name: Assinatura da Apple (se houver)
+        env:
+          CERT: ${{ secrets.APPLE_CERTIFICATE }}
+        run: |
+          if [ -n "$CERT" ]; then
+            {
+              echo "APPLE_CERTIFICATE=$CERT"
+              echo "APPLE_CERTIFICATE_PASSWORD=${{ secrets.APPLE_CERTIFICATE_PASSWORD }}"
+              echo "APPLE_SIGNING_IDENTITY=${{ secrets.APPLE_SIGNING_IDENTITY }}"
+              echo "APPLE_ID=${{ secrets.APPLE_ID }}"
+              echo "APPLE_PASSWORD=${{ secrets.APPLE_PASSWORD }}"
+              echo "APPLE_TEAM_ID=${{ secrets.APPLE_TEAM_ID }}"
+            } >> "$GITHUB_ENV"
+          else
+            echo "::warning::Sem certificado Apple nos secrets: o app sai sem Developer ID nem notarização (Gatekeeper pede clique direito > Abrir)."
+          fi
+      - name: App e dmg
+        working-directory: desktop
+        env:
+          CI: "true"
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          TABDISPLAY_SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+        run: |
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            npx tauri build --bundles app,dmg --config src-tauri/tauri.release.conf.json
+          else
+            npx tauri build --bundles app,dmg
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tabdisplay-macos
+          path: |
+            desktop/src-tauri/target/release/bundle/dmg/*.dmg
+            desktop/src-tauri/target/release/bundle/macos/*.app.tar.gz
+            desktop/src-tauri/target/release/bundle/macos/*.app.tar.gz.sig
+          retention-days: 30
