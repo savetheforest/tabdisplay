@@ -21,6 +21,24 @@ cd desktop && npm install && npx tauri build
 ```
 Sai em `desktop/src-tauri/target/release/bundle/nsis/`.
 
+## macOS (Apple Silicon, macOS 14+)
+Não precisa de driver: o monitor virtual usa a `CGVirtualDisplay` do sistema e existe só enquanto um
+tablet está conectado. Na primeira execução o macOS pede **Gravação de Tela**, **Acessibilidade**
+(o toque do tablet vira clique) e **Rede Local** (para o tablet achar o Mac).
+
+Gerar o `.dmg` (num Mac, com Rust e `cargo install tauri-cli --version "^2"`):
+```
+cp <app-release.apk> desktop/src-tauri/resources/tabdisplay.apk
+sh scripts/sign-mac.sh          # 1ª vez: cria a identidade "TabDisplay Dev" (chaveiro próprio)
+cd desktop && CI=true APPLE_SIGNING_IDENTITY="TabDisplay Dev" cargo tauri build --bundles app,dmg
+```
+A assinatura estável faz o macOS manter as permissões entre builds. Ela é autoassinada: em outros Macs
+o Gatekeeper pede clique direito → Abrir (para distribuir de verdade, use um Developer ID da Apple).
+
+## Ícones
+`python scripts/make-icon.py` desenha a logo; `npx tauri icon` gera os tamanhos do desktop e
+`python scripts/make-android-icon.py` gera o ícone adaptativo do Android.
+
 ## Desenvolver
 ```
 cd desktop && npm run tauri dev
