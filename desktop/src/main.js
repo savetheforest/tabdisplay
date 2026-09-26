@@ -6,6 +6,7 @@ const PROFILES = {
   performance: "Metade da resolução do tablet, 60 fps, 10 Mbps. Mais leve para Wi‑Fi fraco.",
   balanced: "Resolução do tablet, 60 fps, 20 Mbps.",
   quality: "Resolução do tablet, 60 fps, 40 Mbps. Mais nítido, pede uma boa conexão.",
+  auto: "Começa no equilibrado e ajusta sozinho: baixa a qualidade se a rede piorar e sobe de volta quando melhora.",
   custom: "Você escolhe resolução, quadros por segundo e taxa de dados.",
 };
 const DRIVER = {
@@ -109,7 +110,8 @@ async function refresh() {
     if (connected) {
       $("hero-title").textContent = `Conectado a ${s.session}`;
       const fallback = s.status.includes("falhou");
-      setBadge(fallback ? "warn" : "good", s.status.replace(/ ·.*$/, ""));
+      if (s.stats?.reduced) setBadge("warn", "Rede lenta: reduzindo a qualidade automaticamente");
+      else setBadge(fallback ? "warn" : "good", s.status.replace(/ ·.*$/, ""));
     } else {
       $("hero-title").textContent = "Aguardando tablet";
       setBadge("wait", "No tablet, abra o TabDisplay e toque no nome deste PC");

@@ -52,7 +52,7 @@ interface StreamEvents {
     fun onClose(reason: String)
     /** Once a second: frames this tablet showed, round trip and data rate (as measured by the PC). */
     fun onStats(shownFps: Int, rttMs: Int, mbps: Double) {}
-    /** The quality preset the PC uses now: "performance", "balanced", "quality" or "custom". */
+    /** The quality preset the PC uses now: "performance", "balanced", "quality", "auto" or "custom". */
     fun onProfile(profile: String) {}
 }
 
@@ -135,7 +135,7 @@ class Stream(
     /** One SCROLL frame (mouse wheel / trackpad), already encoded (see [Input.scroll]). */
     fun scroll(frame: ByteArray) = send(SCROLL) { write(frame) }
 
-    /** Asks the PC to switch to a quality preset ("performance", "balanced" or "quality"). */
+    /** Asks the PC to switch to a quality preset ("performance", "balanced", "quality" or "auto"). */
     fun setProfile(profile: String) = sendJson(PROFILE, JSONObject().put("profile", profile))
 
     /** The tablet rotated: ask for video (and a virtual monitor) of the new decodable size. */

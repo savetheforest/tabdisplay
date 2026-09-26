@@ -36,6 +36,7 @@
     <string name="profile_performance">Qualidade: desempenho</string>
     <string name="profile_balanced">Qualidade: equilibrado</string>
     <string name="profile_quality">Qualidade: máxima</string>
+    <string name="profile_auto">Qualidade: automática</string>
     <string name="profile_custom">Qualidade: personalizada (PC)</string>
     <string name="disconnect">Desconectar</string>
     <string name="stats_format">%1$d fps · %2$d ms · %3$s Mbps</string>
