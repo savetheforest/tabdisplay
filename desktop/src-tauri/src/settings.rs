@@ -69,6 +69,8 @@ pub struct Settings {
     pub encoder: Encoder,
     pub touch: bool,
     pub touch_mode: TouchMode,
+    /// Send the PC's audio to the tablet.
+    pub audio: bool,
 }
 
 impl Default for Settings {
@@ -84,6 +86,7 @@ impl Default for Settings {
             encoder: Encoder::Auto,
             touch: true,
             touch_mode: TouchMode::Native,
+            audio: true,
         }
     }
 }

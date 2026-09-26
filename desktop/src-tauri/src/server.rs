@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -31,6 +32,7 @@ pub const PONG: u8 = 11;
 pub const STATS_MSG: u8 = 12;
 pub const SCROLL: u8 = 13;
 pub const PROFILE: u8 = 14;
+pub const AUDIO: u8 = 15;
 const MAX_MSG: usize = 16 << 20;
 
 pub static STATUS: Mutex<String> = Mutex::new(String::new());
@@ -241,6 +243,9 @@ fn handle(mut stream: TcpStream) -> io::Result<()> {
         tablet_fps: AtomicU32::new(0),
         adapt: Mutex::new(Adapt::new()),
     });
+    // System audio: captured and encoded on its own thread; `stream_once` writes the packets.
+    let (alive, audio_on) = (shared.clone(), || settings::get().audio);
+    let audio = crate::audio::spawn(move || alive.alive.load(Ordering::Relaxed), audio_on);
     let (mut rd, reader) = (stream.try_clone()?, shared.clone());
     thread::spawn(move || {
         let mut injector = Injector::default();
@@ -297,7 +302,7 @@ fn handle(mut stream: TcpStream) -> io::Result<()> {
     let mut virtual_display = None;
     let mut result = Ok(());
     while shared.alive.load(Ordering::Relaxed) && result.is_ok() {
-        result = stream_once(&mut stream, &shared, &mut virtual_display);
+        result = stream_once(&mut stream, &shared, &mut virtual_display, &audio);
     }
     *STATS.lock().unwrap() = None;
     *SESSION.lock().unwrap() = None;
@@ -357,7 +362,7 @@ fn pair(stream: &mut TcpStream, hello: &Hello) -> io::Result<()> {
 
 /// Streams with the current settings until they change, the tablet rotates, capture is lost, or the
 /// tablet leaves.
-fn stream_once(stream: &mut TcpStream, shared: &Shared, virtual_display: &mut Option<display::VirtualDisplay>) -> io::Result<()> {
+fn stream_once(stream: &mut TcpStream, shared: &Shared, virtual_display: &mut Option<display::VirtualDisplay>, audio: &Receiver<Vec<u8>>) -> io::Result<()> {
     let version = settings::VERSION.load(Ordering::Relaxed);
     let s = settings::get();
     let tablet = *shared.tablet.lock().unwrap();
@@ -440,6 +445,11 @@ fn stream_once(stream: &mut TcpStream, shared: &Shared, virtual_display: &mut Op
             *STATS.lock().unwrap() = Some(stats);
             send_json(stream, PING, &ping)?;
             (tick, frames, bytes, encode_time) = (Instant::now(), 0, 0, Duration::ZERO);
+        }
+        for packet in audio.try_iter() {
+            if s.audio {
+                write_msg(stream, AUDIO, &packet)?;
+            }
         }
         let wait = interval.saturating_sub(last.elapsed()).as_millis().max(1) as u32;
         match cap.next(&mut frame, wait) {

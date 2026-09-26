@@ -20,6 +20,7 @@ Mensagens de controle levam JSON (UTF‑8); VIDEO e INPUT são binárias (big-en
 | 12   | STATS         | tablet → PC | `{"fps"}`: quadros exibidos desde o último PING |
 | 13   | SCROLL        | tablet → PC | roda do mouse / rolagem do trackpad, binário (abaixo) |
 | 14   | PROFILE       | ambos       | `{"profile":"performance"\|"balanced"\|"quality"\|"auto"\|"custom"}`: o PC informa o perfil de qualidade ativo (logo depois de cada CONFIG); o tablet manda o mesmo para trocá-lo ("custom" só o PC define) e o PC refaz o vídeo, como se fosse trocado na tela do PC |
+| 15   | AUDIO         | PC → tablet | um pacote Opus (áudio do PC: 48 kHz, estéreo, 20 ms por pacote; abaixo) |
 
 - `decodable`: o maior tamanho, na proporção da tela, que o decoder H.264 do tablet aguenta (Redmi Pad 2: 2304×1440).
   O PC nunca manda vídeo maior que isso.
@@ -36,6 +37,9 @@ O PC reproduz o quadro como toque/caneta nativos do Windows (os gestos vêm do p
 ## SCROLL
 `[x f32][y f32][dx f32][dy f32]` (big-endian): x/y de 0 a 1 sobre o vídeo (o PC move o cursor até lá antes de rolar) e dx/dy em "cliques" da roda, com o sinal do Android
 (`AXIS_HSCROLL`/`AXIS_VSCROLL`): dy > 0 rola para cima, dx > 0 rola para a direita. No Windows vira `MOUSEEVENTF_WHEEL`/`HWHEEL` (120 por clique); no Mac, um evento de scroll de ~40 px por clique.
+
+## AUDIO
+O PC captura o que toca no alto-falante (WASAPI loopback no Windows, ScreenCaptureKit no Mac), codifica em Opus (48 kHz, estéreo, ~128 kbps, 20 ms) e manda um pacote por mensagem, sem cabeçalho extra. Sem som tocando não há pacotes. O envio pode ser desligado nas configurações do PC.
 
 ## Pareamento
 Um tablet sem token válido precisa digitar o código que aparece no PC (vale 2 minutos, 5 tentativas) —

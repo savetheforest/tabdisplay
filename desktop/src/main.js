@@ -55,6 +55,7 @@ function render() {
   for (const row of $$("[data-show]")) row.hidden = !show[row.dataset.show];
   $("bitrate-out").textContent = `${settings.bitrate_mbps} Mbps`;
   $("profile-desc").textContent = $("profile-desc-2").textContent = PROFILES[settings.profile];
+  $("audio-state").textContent = settings.audio ? "Ligado" : "Desligado";
   $("touch-state").textContent = settings.touch ? "Ligado" : "Desligado";
 }
 

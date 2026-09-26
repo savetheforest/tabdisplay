@@ -1,3 +1,4 @@
+mod audio;
 mod encode;
 mod input;
 mod pairing;
@@ -6,6 +7,7 @@ mod settings;
 // Platform layer: same module names and APIs on each OS; the rest of the app uses `sys::…`.
 #[cfg(windows)]
 mod win {
+    pub mod audio;
     pub mod capture;
     pub mod display;
     pub mod driver;
@@ -15,6 +17,7 @@ mod win {
 }
 #[cfg(target_os = "macos")]
 mod mac {
+    pub mod audio;
     pub mod capture;
     pub mod display;
     pub mod encode;
