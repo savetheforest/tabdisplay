@@ -105,6 +105,7 @@ class MainActivity : ComponentActivity() {
     private var video by mutableStateOf<Pair<Int, Int>?>(null)
     private var stats by mutableStateOf<String?>(null)
     private var showStats by mutableStateOf(false)
+    private var muted by mutableStateOf(false)
     /** The PC's active quality preset, as last reported. */
     private var profile by mutableStateOf<String?>(null)
 
@@ -122,6 +123,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         showStats = prefs.getBoolean("show_stats", false)
+        muted = prefs.getBoolean("muted", false)
         setContent {
             TabDisplayTheme {
                 when (val s = screen) {
@@ -356,6 +358,15 @@ class MainActivity : ComponentActivity() {
                     if (profile == "custom") {
                         DropdownMenuItem(text = { Text(stringResource(R.string.profile_custom)) }, trailingIcon = { Text("✓") }, enabled = false, onClick = {})
                     }
+                    DropdownMenuItem(
+                        text = { Text(stringResource(if (muted) R.string.unmute_audio else R.string.mute_audio)) },
+                        onClick = {
+                            muted = !muted
+                            stream?.muted = muted
+                            prefs.edit().putBoolean("muted", muted).apply()
+                            menu = false
+                        },
+                    )
                     DropdownMenuItem(text = { Text(stringResource(R.string.disconnect)) }, onClick = { menu = false; disconnect() })
                 }
             }
@@ -398,7 +409,7 @@ class MainActivity : ComponentActivity() {
                         stats = getString(R.string.stats_format, shownFps, rttMs, "%.1f".format(mbps))
                     }
                     override fun onClose(reason: String) = runOnUiThread { endSession(reason) }
-                }).also { it.start() }
+                }).also { it.muted = muted; it.start() }
             }
 
             // Rotation: the window's shape changed, so ask the PC for a monitor of the new shape.
