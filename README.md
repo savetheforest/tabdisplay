@@ -25,6 +25,20 @@ cd desktop && npm install && npx tauri build
 ```
 Sai em `desktop/src-tauri/target/release/bundle/nsis/`.
 
+### Assinar o instalador (Windows)
+O Tauri chama `scripts/sign-windows.ps1` para o `tabdisplay.exe` e para o instalador. O certificado vem do
+ambiente, nunca do repositório:
+- `TABDISPLAY_SIGN_PFX` + `TABDISPLAY_SIGN_PFX_PASSWORD`: certificado em arquivo `.pfx` (OV); ou
+- `TABDISPLAY_SIGN_THUMBPRINT`: certificado no repositório do Windows (token USB de um certificado EV).
+
+Sem nenhum dos dois o build sai sem assinatura (aviso no log), como sempre. Precisa do `signtool` (Windows SDK).
+Confira: `signtool verify /pa /v TabDisplay_0.1.0_x64-setup.exe`.
+
+Qual certificado comprar: um EV tira o aviso do SmartScreen na hora; um OV comum assina, mas o SmartScreen
+ainda avisa até o app ganhar reputação. Vale ver também o Azure Trusted Signing (assinatura na nuvem, sem
+token). Nos três casos o `signCommand` pode apontar para outro comando: é só ajustar `bundle.windows.signCommand`
+em `desktop/src-tauri/tauri.windows.conf.json`.
+
 ## macOS (Apple Silicon, macOS 14+)
 Não precisa de driver: o monitor virtual usa a `CGVirtualDisplay` do sistema e existe só enquanto um
 tablet está conectado. Na primeira execução o macOS pede **Gravação de Tela**, **Acessibilidade**
@@ -37,7 +51,21 @@ sh scripts/sign-mac.sh          # 1ª vez: cria a identidade "TabDisplay Dev" (c
 cd desktop && CI=true APPLE_SIGNING_IDENTITY="TabDisplay Dev" cargo tauri build --bundles app,dmg
 ```
 A assinatura estável faz o macOS manter as permissões entre builds. Ela é autoassinada: em outros Macs
-o Gatekeeper pede clique direito → Abrir (para distribuir de verdade, use um Developer ID da Apple).
+o Gatekeeper pede clique direito → Abrir. Para distribuir de verdade, use um Developer ID da Apple e notarize:
+
+### Developer ID e notarização
+1. Conta no Apple Developer Program → Certificates → **Developer ID Application** → instale o certificado no chaveiro.
+2. Crie uma senha específica de app em appleid.apple.com → Segurança.
+3. Rode (o script confere as variáveis, gera o `.app` e o `.dmg`, e verifica com `spctl` e `stapler`):
+```
+export APPLE_SIGNING_IDENTITY="Developer ID Application: Seu Nome (ABCDE12345)"
+export APPLE_ID="voce@exemplo.com" APPLE_PASSWORD="senha-de-app" APPLE_TEAM_ID="ABCDE12345"
+scripts/notarize-mac.sh
+```
+O Tauri assina com hardened runtime, envia ao `notarytool`, espera o resultado e grampeia o ticket no app.
+Pronto quando `spctl -a -vv TabDisplay.app` disser `accepted` / `source=Notarized Developer ID`. As permissões
+de Gravação de Tela e Acessibilidade ficam presas à identidade de assinatura: ao trocar de “TabDisplay Dev”
+para o Developer ID o macOS pede as permissões de novo uma vez.
 
 ## APK de release assinado
 

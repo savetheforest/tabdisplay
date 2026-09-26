@@ -9,6 +9,10 @@
       "resources/tabdisplay.apk": "tabdisplay.apk"
     },
     "windows": {
+      "signCommand": {
+        "cmd": "powershell",
+        "args": ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "../../scripts/sign-windows.ps1", "%1"]
+      },
       "nsis": {
         "installMode": "perMachine",
         "installerHooks": "windows/hooks.nsh",
