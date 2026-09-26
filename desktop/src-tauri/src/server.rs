@@ -83,14 +83,27 @@ pub fn computer_name() -> String {
     std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).unwrap_or_else(|_| "PC".into())
 }
 
-/// Announces this PC on the LAN once a second so tablets can list it without typing an IP.
-/// Payload: `TABDISPLAY {"id":…,"name":…}`; the tablet takes the address from the packet's source.
+/// Announces this PC once a second on every network the PC has (Wi‑Fi, Ethernet, and a tablet
+/// tethered by USB) so tablets can list it without typing an IP. A plain broadcast to
+/// 255.255.255.255 only leaves through whichever interface owns the default route, which usually
+/// isn't the USB one (tethering rarely offers internet access), so each interface's own directed
+/// broadcast address is used instead: the OS routes it out that interface because the address is
+/// only reachable there. Payload: `TABDISPLAY {"id":…,"name":…}`; the tablet takes the address
+/// from the packet's source.
 pub fn beacon() {
     let msg = format!("TABDISPLAY {}", json!({ "id": pairing::pc_id(), "name": computer_name() }));
-    let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0") else { return };
-    let _ = sock.set_broadcast(true);
     loop {
-        let _ = sock.send_to(msg.as_bytes(), ("255.255.255.255", BEACON_PORT));
+        for iface in if_addrs::get_if_addrs().unwrap_or_default() {
+            let if_addrs::IfAddr::V4(v4) = iface.addr else { continue };
+            let Some(broadcast) = v4.broadcast else { continue };
+            if v4.ip.is_loopback() {
+                continue;
+            }
+            if let Ok(sock) = std::net::UdpSocket::bind((v4.ip, 0)) {
+                let _ = sock.set_broadcast(true);
+                let _ = sock.send_to(msg.as_bytes(), (broadcast, BEACON_PORT));
+            }
+        }
         thread::sleep(Duration::from_secs(1));
     }
 }

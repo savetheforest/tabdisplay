@@ -169,7 +169,9 @@ class MainActivity : ComponentActivity() {
                 TextButton(onClick = { manual = true }) { Text("Conectar pelo endereço IP") }
                 Text(
                     "O PC precisa estar com o TabDisplay aberto e na mesma rede Wi‑Fi. " +
-                        "Pelo cabo USB, ligue a depuração USB nas opções do desenvolvedor.",
+                        "Pelo cabo, ligue a depuração USB nas opções do desenvolvedor, " +
+                        "ou, sem mexer nelas, compartilhe a internet do tablet pelo USB " +
+                        "e toque no nome do PC assim que ele aparecer.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

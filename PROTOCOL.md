@@ -32,12 +32,22 @@ x/y vão de 0 a 1 sobre o vídeo; pressão de 0 a 1; inclinação em graus.
 O PC reproduz o quadro como toque/caneta nativos do Windows (os gestos vêm do próprio Windows), ou, no modo mouse, só o primeiro dedo move o mouse.
 
 ## Pareamento
-Pelo Wi‑Fi, um tablet sem token válido precisa digitar o código que aparece no PC (vale 2 minutos, 5 tentativas).
-Pelo USB (`adb reverse`, a conexão chega em 127.0.0.1) não há pareamento: o cabo já é prova física.
+Um tablet sem token válido precisa digitar o código que aparece no PC (vale 2 minutos, 5 tentativas) —
+pelo Wi‑Fi, e também pelo cabo quando ele chega como rede (compartilhamento de internet pelo USB): a
+conexão não chega em 127.0.0.1 nesse caso, então não tem como saber que é o mesmo cabo de uma vez pra
+outra sem o token.
+Só o USB via `adb reverse` (a conexão chega em 127.0.0.1) não pede pareamento: o cabo com depuração
+USB ligada já é prova física.
 O tráfego não é criptografado: o token impede que outro aparelho da rede controle o PC, não que alguém escute.
 
 ## Descoberta
-O PC manda, uma vez por segundo, um broadcast UDP para `255.255.255.255:7071` com o texto
-`TABDISPLAY {"id":"<pc_id>","name":"<nome do computador>"}`.
-O tablet pega o IP pelo remetente do pacote (o IP pode mudar; o `id` não) e lista o PC na tela de conexão.
-O USB aparece na lista quando `127.0.0.1:7070` aceita conexão (o PC mantém o `adb reverse` ativo).
+O PC manda, uma vez por segundo, um broadcast UDP na porta 7071 com o texto
+`TABDISPLAY {"id":"<pc_id>","name":"<nome do computador>"}`, para o endereço de broadcast de
+*cada* interface de rede que ele tem (Wi‑Fi, Ethernet, e a rede que aparece quando um tablet
+compartilha a internet pelo USB) — um broadcast só para `255.255.255.255` sairia apenas pela
+interface da rota padrão, que raramente é a do cabo.
+O tablet pega o IP pelo remetente do pacote (o IP pode mudar; o `id` não) e lista o PC na tela de
+conexão; a rede do cabo aparece assim que o tablet liga **Compartilhar internet pelo USB** (sem
+precisar de depuração USB), do mesmo jeito que uma rede Wi‑Fi — inclusive com o mesmo pareamento.
+O USB "sem pareamento" aparece na lista quando `127.0.0.1:7070` aceita conexão (o PC mantém o
+`adb reverse` ativo; isso exige depuração USB ligada).

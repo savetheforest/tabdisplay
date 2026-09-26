@@ -124,7 +124,7 @@ async function refresh() {
   }
 
   $("wifi-desc").textContent = `No tablet, toque em “${s.name}” (${s.ip}).`;
-  $("usb-desc").textContent = s.usb || "Ligue a depuração USB no tablet e conecte o cabo.";
+  $("usb-desc").textContent = s.usb || "Conecte o cabo: com depuração USB liga na hora, ou compartilhe a internet do tablet pelo USB e toque no nome deste PC.";
   $("driver-desc").textContent = DRIVER[s.driver];
 }
 

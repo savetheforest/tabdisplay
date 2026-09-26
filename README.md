@@ -12,6 +12,10 @@ Rode `TabDisplay_<versão>_x64-setup.exe`. O instalador (pede admin uma vez):
 No tablet: ligue a **depuração USB**, conecte o cabo e clique em **Instalar app no tablet** na janela do PC.
 Depois disso o tablet lista o PC sozinho: toque em **USB (cabo)** ou no nome do PC (Wi‑Fi).
 
+Sem mexer em opções do desenvolvedor: instale o app pelo APK (compartilhado por algum outro meio) e,
+já com o cabo conectado, ligue **Compartilhar internet pelo USB** nas configurações do tablet. O PC
+aparece na lista como se fosse Wi‑Fi (com o mesmo pareamento por código).
+
 ## Gerar o instalador
 Precisa de `adb` no PATH (`winget install Google.PlatformTools`) e do driver baixado
 (`winget install --id=VirtualDrivers.Virtual-Display-Driver -e`; o instalador do TabDisplay é quem instala de fato).
