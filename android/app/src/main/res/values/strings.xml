@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Tela de conexão -->
+    <string name="tagline">Use este tablet como segundo monitor do seu PC.</string>
+    <string name="computers">Computadores</string>
+    <string name="searching">Procurando PCs com o TabDisplay aberto…</string>
+    <string name="connect_by_ip">Conectar pelo endereço IP</string>
+    <string name="connect_hint">O PC precisa estar com o TabDisplay aberto e na mesma rede Wi‑Fi. Pelo cabo, ligue a depuração USB nas opções do desenvolvedor, ou, sem mexer nelas, compartilhe a internet do tablet pelo USB e toque no nome do PC assim que ele aparecer.</string>
+    <string name="badge_usb">USB</string>
+    <string name="badge_pc">PC</string>
+    <string name="pc_via_usb">PC pelo cabo USB</string>
+    <string name="pc_via_cable">PC pelo cabo</string>
+    <string name="usb_no_pairing">Sem pareamento: o cabo basta</string>
+    <string name="wifi_host">Wi‑Fi · %1$s</string>
+    <string name="paired">Pareado</string>
+    <string name="new_pc">Novo</string>
+    <string name="connect_by_ip_title">Conectar pelo IP</string>
+    <string name="ip_label">Endereço IP do PC</string>
+    <string name="connect">Conectar</string>
+    <string name="cancel">Cancelar</string>
+
+    <!-- Pareamento -->
+    <string name="pair_wrong">Código errado, tente de novo</string>
+    <string name="pair_title">Parear com %1$s</string>
+    <string name="pair_body">Digite o código de 6 dígitos que apareceu no TabDisplay do PC. Só é pedido na primeira vez.</string>
+    <string name="code_label">Código</string>
+    <string name="pair">Parear</string>
+
+    <!-- Sessão -->
+    <string name="connecting_to">Conectando a %1$s…</string>
+    <string name="reconnecting_in">Reconectando a %1$s em %2$d s…</string>
+    <string name="hide_stats">Esconder estatísticas</string>
+    <string name="show_stats">Mostrar estatísticas</string>
+    <string name="disconnect">Desconectar</string>
+    <string name="stats_format">%1$d fps · %2$d ms · %3$s Mbps</string>
+    <string name="dropped_in_background">A sessão caiu com o app em segundo plano ou a tela bloqueada. %1$s</string>
+
+    <!-- Erros de conexão -->
+    <string name="pc_closed">O PC encerrou a conexão.</string>
+    <string name="pc_no_response">O PC não respondeu. O TabDisplay está aberto nele e na mesma rede?</string>
+    <string name="connection_dropped">A conexão com o PC caiu.</string>
+    <string name="error_generic">Erro: %1$s</string>
+    <string name="invalid_message">Mensagem inválida do PC</string>
+    <string name="pc_refused">O PC recusou a conexão.</string>
+
+    <!-- Notificação da sessão -->
+    <string name="session_channel">Sessão ativa</string>
+    <string name="session_title">TabDisplay conectado</string>
+    <string name="session_text">Conectado a %1$s</string>
+</resources>
