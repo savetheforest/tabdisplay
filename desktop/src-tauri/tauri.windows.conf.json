@@ -1,0 +1,21 @@
+{
+  "bundle": {
+    "targets": [
+      "nsis"
+    ],
+    "resources": {
+      "resources/adb/*": "adb/",
+      "resources/vdd/*": "vdd/",
+      "resources/tabdisplay.apk": "tabdisplay.apk"
+    },
+    "windows": {
+      "nsis": {
+        "installMode": "perMachine",
+        "installerHooks": "windows/hooks.nsh",
+        "languages": [
+          "PortugueseBR"
+        ]
+      }
+    }
+  }
+}
