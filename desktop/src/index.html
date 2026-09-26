@@ -217,10 +217,26 @@
             <div class="label"><span class="title">Monitor virtual</span><span class="desc" id="driver-desc"></span></div>
             <button class="btn" id="restart">Reiniciar</button>
           </div>
+          <div class="row">
+            <svg class="icon"><use href="#i-touch" /></svg>
+            <div class="label"><span class="title">Guia de primeiro uso</span><span class="desc">Instalar o app no tablet, permissões e como conectar</span></div>
+            <button class="btn" id="show-guide">Ver instruções de novo</button>
+          </div>
         </div>
         <p class="muted small">Fechar a janela deixa o TabDisplay na bandeja. Para sair de vez, use “Sair” no ícone da bandeja.</p>
       </section>
     </main>
+
+    <dialog id="guide">
+      <h3 id="guide-title"></h3>
+      <div id="guide-body"></div>
+      <p class="muted small" id="guide-step"></p>
+      <div class="actions">
+        <button class="btn" id="guide-skip">Pular</button>
+        <button class="btn" id="guide-back">Voltar</button>
+        <button class="btn" id="guide-next">Próximo</button>
+      </div>
+    </dialog>
 
     <dialog id="pair-dialog">
       <h3>Parear tablet</h3>

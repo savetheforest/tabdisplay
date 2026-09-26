@@ -232,6 +232,7 @@ fn supports_mica() -> bool {
 fn ui_info(app: tauri::AppHandle) -> serde_json::Value {
     serde_json::json!({
         "mica": supports_mica(),
+        "os": std::env::consts::OS,
         "version": app.package_info().version.to_string(),
         "autostart": app.autolaunch().is_enabled().unwrap_or(false),
     })

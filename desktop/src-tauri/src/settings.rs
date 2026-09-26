@@ -71,6 +71,8 @@ pub struct Settings {
     pub touch_mode: TouchMode,
     /// Send the PC's audio to the tablet.
     pub audio: bool,
+    /// The first-run guide was shown (or skipped).
+    pub onboarded: bool,
 }
 
 impl Default for Settings {
@@ -87,6 +89,7 @@ impl Default for Settings {
             touch: true,
             touch_mode: TouchMode::Native,
             audio: true,
+            onboarded: false,
         }
     }
 }
@@ -101,7 +104,12 @@ pub fn init(dir: PathBuf) {
     // 0.1 used the identifier com.tabdisplay.app; carry its settings over once.
     let old = dir.with_file_name("com.tabdisplay.app").join("settings.json");
     let text = std::fs::read_to_string(&path).or_else(|_| std::fs::read_to_string(old));
-    let loaded = text.ok().and_then(|s| serde_json::from_str(&s).ok());
+    // Settings from before the first-run guide existed belong to someone who already knows the app.
+    let known_user = text.as_ref().is_ok_and(|t| !t.contains("\"onboarded\""));
+    let mut loaded: Option<Settings> = text.ok().and_then(|s| serde_json::from_str(&s).ok());
+    if let (Some(s), true) = (&mut loaded, known_user) {
+        s.onboarded = true;
+    }
     *CURRENT.lock().unwrap() = Some(loaded.unwrap_or_default());
     let _ = PATH.set(path);
 }
