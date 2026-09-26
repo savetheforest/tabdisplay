@@ -3,6 +3,7 @@ mod input;
 mod pairing;
 mod server;
 mod settings;
+// Platform layer: same module names and APIs on each OS; the rest of the app uses `sys::…`.
 #[cfg(windows)]
 mod win {
     pub mod capture;
@@ -12,6 +13,17 @@ mod win {
     pub mod input;
     pub mod service;
 }
+#[cfg(target_os = "macos")]
+mod mac {
+    pub mod capture;
+    pub mod display;
+    pub mod encode;
+    pub mod input;
+}
+#[cfg(windows)]
+use win as sys;
+#[cfg(target_os = "macos")]
+use mac as sys;
 
 use settings::Settings;
 use std::net::UdpSocket;
@@ -23,8 +35,9 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::window::{Effect, EffectsBuilder};
 use tauri::Manager;
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
-use win::{capture, display, driver, service};
+use sys::{capture, display};
 
+#[cfg(windows)]
 pub use win::driver::cli as driver_cli;
 
 /// Last result of the automatic `adb reverse`, shown in the UI.
@@ -82,7 +95,10 @@ fn options() -> (Vec<(String, u32, u32)>, &'static [(u32, u32)]) {
 
 #[tauri::command]
 async fn restart_driver() -> String {
-    match service::restart() {
+    #[cfg(not(windows))]
+    return "Não é necessário neste sistema.".into();
+    #[cfg(windows)]
+    match win::service::restart() {
         Ok(()) => "Monitor virtual reiniciado.".into(),
         Err(e) => format!("Falhou: {e}"),
     }
@@ -94,13 +110,24 @@ fn adb(args: &[&str]) -> std::io::Result<std::process::Output> {
     static PATH: OnceLock<std::path::PathBuf> = OnceLock::new();
     let path = PATH.get_or_init(|| {
         let on_path = hidden(Command::new("adb").arg("version")).output().is_ok();
-        if on_path { "adb".into() } else { driver::resource(r"adb\adb.exe") }
+        if on_path { "adb".into() } else { resource(if cfg!(windows) { "adb/adb.exe" } else { "adb/adb" }) }
     });
     hidden(Command::new(path).args(args)).output()
 }
 
+/// No console window flashing up for each adb call on Windows.
 fn hidden(cmd: &mut Command) -> &mut Command {
-    std::os::windows::process::CommandExt::creation_flags(cmd, 0x0800_0000) // CREATE_NO_WINDOW
+    #[cfg(windows)]
+    std::os::windows::process::CommandExt::creation_flags(cmd, 0x0800_0000); // CREATE_NO_WINDOW
+    cmd
+}
+
+/// A file bundled with the app (Windows: next to the exe; macOS: in the .app's Resources).
+fn resource(name: &str) -> std::path::PathBuf {
+    APP.get()
+        .and_then(|a| a.path().resource_dir().ok())
+        .unwrap_or_else(|| std::env::current_exe().unwrap_or_default().with_file_name(""))
+        .join(name)
 }
 
 /// Keeps `adb reverse` set up so a tablet on the cable can reach this PC at its 127.0.0.1.
@@ -117,7 +144,7 @@ fn usb_forward() {
 /// Installs the bundled tablet app over the cable (USB debugging must be on).
 #[tauri::command]
 async fn install_apk() -> String {
-    let apk = driver::resource("tabdisplay.apk");
+    let apk = resource("tabdisplay.apk");
     match adb(&["install", "-r", &apk.display().to_string()]) {
         Ok(o) if o.status.success() => "App instalado no tablet.".into(),
         Ok(o) => format!("Falhou: {}", String::from_utf8_lossy(&o.stdout).trim()),
@@ -179,6 +206,11 @@ fn tray(app: &tauri::App) -> tauri::Result<()> {
 }
 
 /// Mica needs Windows 11 (build 22000+); on Windows 10 a transparent window would just be see-through.
+#[cfg(not(windows))]
+fn supports_mica() -> bool {
+    false
+}
+#[cfg(windows)]
 fn supports_mica() -> bool {
     let mut v = windows::Win32::System::SystemInformation::OSVERSIONINFOW {
         dwOSVersionInfoSize: size_of::<windows::Win32::System::SystemInformation::OSVERSIONINFOW>() as u32,

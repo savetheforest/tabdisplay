@@ -6,6 +6,8 @@ use windows::Win32::Media::MediaFoundation::*;
 use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, COINIT_MULTITHREADED};
 use windows::Win32::System::Variant::VARIANT;
 
+pub type HwEncoder = MfEncoder;
+
 pub struct MfEncoder {
     mft: IMFTransform,
     events: IMFMediaEventGenerator,

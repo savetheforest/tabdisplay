@@ -2,7 +2,7 @@
 use crate::encode::H264;
 use crate::pairing::{self, Check};
 use crate::settings::{self, Encoder, Mode, Profile, Settings, TouchMode};
-use crate::win::{capture::Capture, display, encode::MfEncoder, input::Injector};
+use crate::sys::{capture::Capture, display, encode::HwEncoder, input::Injector};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::{self, Read, Write};
@@ -73,6 +73,13 @@ fn refuse(w: &mut impl Write, message: &str) -> io::Error {
 
 
 pub fn computer_name() -> String {
+    #[cfg(target_os = "macos")]
+    if let Ok(o) = std::process::Command::new("scutil").args(["--get", "ComputerName"]).output() {
+        let name = String::from_utf8_lossy(&o.stdout).trim().to_string();
+        if !name.is_empty() {
+            return name;
+        }
+    }
     std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).unwrap_or_else(|_| "PC".into())
 }
 
@@ -117,7 +124,7 @@ struct Hello {
     decodable: (u32, u32),
 }
 
-use crate::win::input::Rect;
+use crate::sys::input::Rect;
 /// Where tablet input goes and whether touch acts as a mouse; None = input off.
 type Target = Option<(Rect, bool)>;
 
@@ -396,7 +403,7 @@ type EncodeFn = Box<dyn FnMut(&[u8], &mut Vec<u8>) -> io::Result<()>>;
 fn encoder(w: usize, h: usize, fps: u32, mbps: u32, choice: Encoder) -> io::Result<(EncodeFn, &'static str)> {
     let bitrate = mbps * 1_000_000;
     if choice != Encoder::Cpu {
-        match MfEncoder::new(w, h, fps, bitrate) {
+        match HwEncoder::new(w, h, fps, bitrate) {
             Ok(mut e) => return Ok((Box::new(move |f, out| e.encode(f, out).map_err(io::Error::other)), "GPU")),
             Err(err) if choice == Encoder::Gpu => return Err(io::Error::other(err)),
             Err(err) => eprintln!("hardware encoder unavailable ({err}), using openh264"),
