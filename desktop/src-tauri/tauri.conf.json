@@ -34,5 +34,12 @@
       "icons/icon.ico"
     ]
   },
-  "mainBinaryName": "tabdisplay"
+  "mainBinaryName": "tabdisplay",
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDI3QUNFOTdEQzUxOEY5RjMKUldUeitSakZmZW1zSitTUkZObHZZRFZCbDRrRUYzYit5ZHpmVXNHTVVQM1FsU3ZSdEFlYkNtd2kK",
+      "endpoints": ["https://github.com/savetheforest/tabdisplay/releases/latest/download/latest.json"],
+      "windows": { "installMode": "passive" }
+    }
+  }
 }

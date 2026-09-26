@@ -42,6 +42,13 @@
       <!-- Início -->
       <section id="page-home">
         <h1>Início</h1>
+        <div class="card" id="update-banner" hidden>
+          <div class="row">
+            <svg class="icon"><use href="#i-ok" /></svg>
+            <div class="label"><span class="title">Nova versão <span id="update-version"></span> disponível</span><span class="desc" id="update-notes"></span></div>
+            <button class="btn" id="update-install">Instalar e reiniciar</button>
+          </div>
+        </div>
         <div class="card hero" id="hero">
           <div class="device"></div>
           <div>
@@ -216,6 +223,11 @@
             <svg class="icon"><use href="#i-monitor" /></svg>
             <div class="label"><span class="title">Monitor virtual</span><span class="desc" id="driver-desc"></span></div>
             <button class="btn" id="restart">Reiniciar</button>
+          </div>
+          <div class="row">
+            <svg class="icon"><use href="#i-ok" /></svg>
+            <div class="label"><span class="title">Atualizações</span><span class="desc" id="update-desc"></span></div>
+            <button class="btn" id="update-check">Verificar agora</button>
           </div>
           <div class="row">
             <svg class="icon"><use href="#i-power" /></svg>

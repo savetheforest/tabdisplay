@@ -7,6 +7,7 @@ mod server;
 mod settings;
 mod telemetry;
 mod tls;
+mod update;
 // Platform layer: same module names and APIs on each OS; the rest of the app uses `sys::…`.
 #[cfg(windows)]
 mod win {
@@ -284,6 +285,7 @@ pub fn run() {
     tauri::Builder::default()
         // A second launch (Start menu, autostart) focuses the running window instead of fighting for port 7070.
         .plugin(tauri_plugin_single_instance::init(|_, _, _| show_window()))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // Started with Windows: come up in the tray, not in the user's face.
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--minimized"])))
         .setup(|app| {
@@ -317,6 +319,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             status,
+            update::check_update,
+            update::install_update,
             license_status,
             activate_license,
             remove_license,

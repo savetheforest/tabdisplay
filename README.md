@@ -100,6 +100,35 @@ cd desktop && npm run tauri dev
 cd android && ./gradlew installDebug
 ```
 
+## Atualização automática (Windows e Mac)
+O app procura, uns segundos depois de abrir (e em Avançado → Atualizações), o `latest.json` da última release
+do GitHub (`plugins.updater.endpoints` em `desktop/src-tauri/tauri.conf.json`). Achando uma versão maior, mostra
+um aviso em Início; “Instalar e reiniciar” baixa, **confere a assinatura minisign contra a chave pública embutida
+no app** e só então instala (assinatura errada ou arquivo adulterado = a atualização é recusada; há teste
+para isso em `desktop/src-tauri/tests/update_signature.rs`). No Mac o `.app` é substituído no lugar e mantém a
+mesma identidade de assinatura, então as permissões de Gravação de Tela/Acessibilidade continuam valendo.
+
+Chaves (uma vez): `cd desktop && npx tauri signer generate -w ~/.tabdisplay/updater.key`. A **chave privada e a senha ficam
+fora do repositório** (backup!); a chave pública vai em `plugins.updater.pubkey`. Perdeu a privada: só um instalador
+novo, com outra chave pública, alcança os usuários.
+
+Publicar uma versão:
+1. Aumente a versão em `desktop/src-tauri/tauri.conf.json`, `Cargo.toml` e `desktop/package.json`.
+2. Em cada máquina (senha e caminho da chave no ambiente):
+   ```
+   export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tabdisplay/updater.key)" TAURI_SIGNING_PRIVATE_KEY_PASSWORD=...
+   # Windows (PowerShell: $env:...):  cd desktop; npx tauri build --config src-tauri/tauri.release.conf.json
+   # Mac:                              cd desktop; cargo tauri build --bundles app,dmg --config src-tauri/tauri.release.conf.json
+   ```
+   Saem o instalador (`*-setup.exe` / `.dmg`), o pacote de atualização (`*-setup.exe` / `TabDisplay.app.tar.gz`) e os `.sig`.
+3. Monte o manifesto (cada máquina contribui com a sua plataforma; `--merge` junta):
+   ```
+   node scripts/make-latest-json.mjs 0.2.0 https://github.com/<dono>/tabdisplay/releases/download/v0.2.0 --notes "o que mudou"
+   node scripts/make-latest-json.mjs 0.2.0 <mesma-url> --bundle <pasta-do-mac> --merge latest.json
+   ```
+4. `gh release create v0.2.0 <instalador> <tar.gz> <.sig> latest.json`. O app só enxerga a release se o endereço for público
+   (repositório público ou um endpoint próprio: troque `endpoints`).
+
 ## Licença (modo estender)
 
 Sem licença o app só espelha; estender exige uma licença válida (Avançado → Licença). A validação é offline: a licença é um texto assinado com Ed25519 e o app traz só a chave pública (`desktop/src-tauri/src/license.rs`).
