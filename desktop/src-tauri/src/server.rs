@@ -182,7 +182,10 @@ pub fn beacon() {
 pub fn run() {
     let listener = match TcpListener::bind(("0.0.0.0", PORT)) {
         Ok(l) => l,
-        Err(e) => return set_status(format!("Erro ao abrir porta {PORT}: {e}")),
+        Err(e) => {
+            crate::telemetry::warn(format!("could not open port {PORT}: {e}"));
+            return set_status(format!("Erro ao abrir porta {PORT}: {e}"));
+        }
     };
     set_status("Aguardando tablet");
     for stream in listener.incoming().flatten() {
@@ -314,6 +317,7 @@ fn handle(mut stream: Conn) -> io::Result<()> {
         Err(message) => return Err(refuse(&mut stream, &message)),
     };
     let id = registered.0;
+    crate::telemetry::crumb("session", if usb { "connected over usb" } else { "connected over wifi" });
 
     let shared = Arc::new(Shared {
         id,
@@ -539,7 +543,7 @@ fn stream_once(stream: &mut Conn, shared: &Shared, virtual_display: &mut Option<
             Ok(false) => pending |= last_change.elapsed() < FLUSH,
             Err(e) => {
                 // e.g. ACCESS_LOST on a mode change, UAC prompt or lock screen: rebuild.
-                eprintln!("capture lost: {e}");
+                crate::telemetry::crumb("capture", &format!("capture lost: {e}"));
                 thread::sleep(Duration::from_millis(300));
                 break;
             }
@@ -576,7 +580,7 @@ fn open_capture(device: Option<&str>, tablet: (u32, u32)) -> io::Result<Capture>
             Ok(c) => return Ok(c),
             Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(100)),
             Err(e) if device.is_some() => {
-                eprintln!("capture {device:?} failed ({e}), using primary");
+                crate::telemetry::warn(format!("capture {device:?} failed ({e}), using primary"));
                 return Capture::open(None, |size| fit(size, tablet)).map_err(io::Error::other);
             }
             Err(e) => return Err(io::Error::other(e)),
@@ -593,7 +597,7 @@ fn encoder(w: usize, h: usize, fps: u32, mbps: u32, choice: Encoder) -> io::Resu
         match HwEncoder::new(w, h, fps, bitrate) {
             Ok(mut e) => return Ok((Box::new(move |f, out| e.encode(f, out).map_err(io::Error::other)), "GPU")),
             Err(err) if choice == Encoder::Gpu => return Err(io::Error::other(err)),
-            Err(err) => eprintln!("hardware encoder unavailable ({err}), using openh264"),
+            Err(err) => crate::telemetry::warn(format!("hardware encoder unavailable ({err}), using openh264")),
         }
     }
     let mut e = H264::new(w, h, fps, bitrate).map_err(io::Error::other)?;

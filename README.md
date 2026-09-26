@@ -62,6 +62,10 @@ node scripts/license.mjs issue "Nome" "email@exemplo.com"  # imprime a licença 
 
 A chave privada nunca entra no repositório. Se trocar o par de chaves, atualize `PUBLIC_KEY` em `license.rs` (licenças antigas deixam de valer). O link do botão “Comprar licença” é `BUY_URL` no mesmo arquivo.
 
+## Relatório de erros (Sentry)
+
+Desligado por padrão. Para ligar no app do PC, defina o DSN ao compilar (`TABDISPLAY_SENTRY_DSN=https://…@…ingest.sentry.io/… cargo tauri build`) ou no ambiente ao abrir o app. Panics de qualquer thread (o release aborta o processo, então o app espera o envio) e falhas recuperáveis (captura, encoder de hardware, driver) viram eventos; não vão IP, nome do PC/tablet, códigos nem tokens.
+
 ## Monitor virtual (modo estender)
 O app grava as resoluções em `C:\VirtualDisplayDriver\vdd_settings.xml`, que o driver só lê ao iniciar.
 O instalador já faz esse reinício; **Reiniciar driver** na janela do app fica para casos raros

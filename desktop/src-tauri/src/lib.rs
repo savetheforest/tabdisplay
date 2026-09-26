@@ -5,6 +5,7 @@ mod license;
 mod pairing;
 mod server;
 mod settings;
+mod telemetry;
 mod tls;
 // Platform layer: same module names and APIs on each OS; the rest of the app uses `sys::…`.
 #[cfg(windows)]
@@ -109,7 +110,10 @@ async fn restart_driver() -> String {
     #[cfg(windows)]
     match win::service::restart() {
         Ok(()) => "Monitor virtual reiniciado.".into(),
-        Err(e) => format!("Falhou: {e}"),
+        Err(e) => {
+            telemetry::warn(format!("driver restart failed: {e}"));
+            format!("Falhou: {e}")
+        }
     }
 }
 
@@ -276,6 +280,7 @@ fn set_autostart(app: tauri::AppHandle, on: bool) -> bool {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let _sentry = telemetry::init(); // reports panics from any thread; off without a DSN
     tauri::Builder::default()
         // A second launch (Start menu, autostart) focuses the running window instead of fighting for port 7070.
         .plugin(tauri_plugin_single_instance::init(|_, _, _| show_window()))
