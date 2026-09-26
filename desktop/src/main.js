@@ -91,6 +91,11 @@ function setBadge(kind, text) {
 async function refresh() {
   const s = await invoke("status");
   const connected = Boolean(s.session);
+  if (s.profile !== settings.profile) {
+    // The tablet changed the quality preset.
+    settings.profile = s.profile;
+    render();
+  }
   $("hero").classList.toggle("connected", connected);
 
   if (s.pairing) {

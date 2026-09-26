@@ -60,6 +60,7 @@ fn status() -> serde_json::Value {
         "driver": display::driver_state(),
         "usb": *USB.lock().unwrap(),
         "pairing": pairing,
+        "profile": settings::get().profile,
         "stats": server::STATS.lock().unwrap().clone(),
         "session": server::SESSION.lock().unwrap().clone(),
     })
