@@ -19,6 +19,7 @@ mod mac {
     pub mod display;
     pub mod encode;
     pub mod input;
+    pub mod permissions;
 }
 #[cfg(windows)]
 use win as sys;
@@ -248,6 +249,8 @@ pub fn run() {
             settings::init(app.path().app_config_dir()?);
             pairing::init(app.path().app_config_dir()?);
             tray(app)?;
+            #[cfg(target_os = "macos")]
+            mac::permissions::request();
             if let Some(window) = app.get_webview_window("main") {
                 if supports_mica() {
                     let _ = window.set_effects(EffectsBuilder::new().effect(Effect::Mica).build());

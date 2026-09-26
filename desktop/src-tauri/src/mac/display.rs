@@ -73,9 +73,12 @@ impl Drop for VirtualDisplay {
     }
 }
 
-/// Always "ok": macOS needs nothing installed for virtual monitors.
+/// macOS needs nothing installed, only the Screen Recording and Accessibility permissions.
 pub fn driver_state() -> &'static str {
-    "ok"
+    match super::permissions::granted() {
+        (true, true) => "ok",
+        _ => "sem-permissao",
+    }
 }
 
 /// Id of the virtual monitor, if one is up (so the UI can leave it out of the mirror list).

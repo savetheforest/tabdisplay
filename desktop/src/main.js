@@ -12,6 +12,7 @@ const DRIVER = {
   ok: "Pronto. Aparece só enquanto um tablet está conectado.",
   "sem-servico": "O serviço do TabDisplay está parado. Reinstale o app para estender a tela.",
   ausente: "Driver não instalado: só dá para espelhar. Reinstale o app.",
+  "sem-permissao": "Falta permissão: em Ajustes do Sistema → Privacidade e Segurança, ligue o TabDisplay em Gravação de Tela e em Acessibilidade.",
 };
 
 let settings;
