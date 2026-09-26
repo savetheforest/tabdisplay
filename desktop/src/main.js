@@ -113,6 +113,7 @@ async function refresh() {
       const fallback = s.status.includes("falhou");
       if (s.stats?.reduced) setBadge("warn", "Rede lenta: reduzindo a qualidade automaticamente");
       else setBadge(fallback ? "warn" : "good", s.status.replace(/ ·.*$/, ""));
+      if (s.sessions.length > 1) $("hero-detail").textContent = `${s.sessions.length} tablets conectados`;
     } else {
       $("hero-title").textContent = "Aguardando tablet";
       setBadge("wait", "No tablet, abra o TabDisplay e toque no nome deste PC");

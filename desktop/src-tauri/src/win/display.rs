@@ -7,6 +7,7 @@ use super::service::{self, Lease};
 use crate::settings::Position;
 use std::fs;
 use std::io;
+use std::sync::Mutex;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 use windows::core::PCWSTR;
@@ -19,6 +20,10 @@ const SETTINGS: &str = r"C:\VirtualDisplayDriver\vdd_settings.xml";
 const MONITOR_ID: &str = "MTT1337";
 /// Offered in the UI; written to the driver in both orientations.
 pub const PRESETS: &[(u32, u32)] = &[(1280, 800), (1920, 1200), (2560, 1600), (1920, 1080), (2560, 1440)];
+/// Virtual monitors the driver is asked to offer: one per tablet that can be connected at once.
+pub const MAX_TABLETS: usize = 2;
+/// GDI names of the virtual monitors sessions currently use, so two sessions never share one.
+static CLAIMED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// With more modes than about this (resolutions x refresh rates) the driver plugs in no monitor at all.
 const MAX_REFRESH: u32 = 120;
 
@@ -32,6 +37,7 @@ pub struct VirtualDisplay {
 
 impl Drop for VirtualDisplay {
     fn drop(&mut self) {
+        CLAIMED.lock().unwrap().retain(|d| d != &self.device);
         let _ = apply(&self.device, DEVMODEW {
             dmSize: size_of::<DEVMODEW>() as u16,
             dmFields: DM_POSITION | DM_PELSWIDTH | DM_PELSHEIGHT, // all zero = detach
@@ -67,7 +73,7 @@ pub fn ensure_modes(extra: &[(u32, u32)]) -> io::Result<bool> {
 }
 
 fn with_modes(xml: &str, extra: &[(u32, u32)]) -> io::Result<String> {
-    let mut xml = trim(xml);
+    let mut xml = with_count(&trim(xml));
     let mut added = String::new();
     for &(w, h) in PRESETS.iter().chain(extra) {
         for e in [entry(w, h), entry(h, w)] {
@@ -79,6 +85,14 @@ fn with_modes(xml: &str, extra: &[(u32, u32)]) -> io::Result<String> {
     let i = xml.find("<resolutions>").ok_or_else(|| io::Error::other("vdd_settings.xml sem <resolutions>"))? + "<resolutions>".len();
     xml.insert_str(i, &added);
     Ok(xml)
+}
+
+/// Sets how many virtual monitors the driver offers (`<count>`), if the file has that setting.
+fn with_count(xml: &str) -> String {
+    let (open, close) = ("<count>", "</count>");
+    let Some(start) = xml.find(open).map(|i| i + open.len()) else { return xml.to_string() };
+    let Some(end) = xml[start..].find(close).map(|i| start + i) else { return xml.to_string() };
+    format!("{}{}{}", &xml[..start], MAX_TABLETS, &xml[end..])
 }
 
 /// Drops the driver's stock 30 Hz resolutions and global refresh rates above MAX_REFRESH.
@@ -122,18 +136,19 @@ impl VirtualDisplay {
         }
         let deadline = Instant::now() + Duration::from_secs(10);
         self.device = loop {
-            match find_device() {
+            match self.pick_device() {
                 Some(d) => break d,
                 None if Instant::now() < deadline && self.lease.is_some() => sleep(Duration::from_millis(200)),
-                None => return Err(io::Error::other("monitor virtual indisponível (serviço do TabDisplay parado?)")),
+                None => return Err(io::Error::other("monitor virtual indisponível (serviço do TabDisplay parado ou todos em uso?)")),
             }
         };
-        let (pw, ph) = unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) };
+        // Next to everything else on the desktop (other tablets' monitors included), not just the primary.
+        let (l, t, r, b) = desktop_bounds_without(&self.device);
         let (x, y) = match pos {
-            Position::Right => (pw, 0),
-            Position::Left => (-(w as i32), 0),
-            Position::Above => (0, -(h as i32)),
-            Position::Below => (0, ph),
+            Position::Right => (r, 0),
+            Position::Left => (l - w as i32, 0),
+            Position::Above => (0, t - h as i32),
+            Position::Below => (0, b),
         };
         let mut mode = DEVMODEW {
             dmSize: size_of::<DEVMODEW>() as u16,
@@ -155,8 +170,59 @@ impl VirtualDisplay {
     }
 }
 
-/// GDI name of the virtual monitor (attached or not), if it is plugged in.
+impl VirtualDisplay {
+    /// Keeps the monitor this session already has, else claims a plugged-in one no other session uses.
+    /// (GDI names change when the driver restarts, hence the re-check.)
+    fn pick_device(&mut self) -> Option<String> {
+        let mut claimed = CLAIMED.lock().unwrap();
+        let all = find_devices();
+        if all.contains(&self.device) {
+            return Some(self.device.clone());
+        }
+        claimed.retain(|d| d != &self.device); // stale name
+        let free = all.into_iter().find(|d| !claimed.contains(d))?;
+        claimed.push(free.clone());
+        Some(free)
+    }
+}
+
+/// Bounding box (left, top, right, bottom) of every monitor on the desktop except `device`. With no other
+/// monitor, the primary's rect (0, 0, w, h).
+fn desktop_bounds_without(device: &str) -> (i32, i32, i32, i32) {
+    let mut bounds: Option<(i32, i32, i32, i32)> = None;
+    unsafe {
+        let mut adapter = DISPLAY_DEVICEW { cb: size_of::<DISPLAY_DEVICEW>() as u32, ..Default::default() };
+        let mut i = 0;
+        while EnumDisplayDevicesW(PCWSTR::null(), i, &mut adapter, 0).as_bool() {
+            i += 1;
+            let name = from_wide(&adapter.DeviceName);
+            if name == device || adapter.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP != DISPLAY_DEVICE_ATTACHED_TO_DESKTOP {
+                continue;
+            }
+            let wide_name = wide(&name);
+            let mut mode = DEVMODEW { dmSize: size_of::<DEVMODEW>() as u16, ..Default::default() };
+            if !EnumDisplaySettingsW(PCWSTR(wide_name.as_ptr()), ENUM_CURRENT_SETTINGS, &mut mode).as_bool() {
+                continue;
+            }
+            let p = mode.Anonymous1.Anonymous2.dmPosition;
+            let rect = (p.x, p.y, p.x + mode.dmPelsWidth as i32, p.y + mode.dmPelsHeight as i32);
+            bounds = Some(match bounds {
+                None => rect,
+                Some(b) => (b.0.min(rect.0), b.1.min(rect.1), b.2.max(rect.2), b.3.max(rect.3)),
+            });
+        }
+    }
+    bounds.unwrap_or_else(|| unsafe { (0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) })
+}
+
+/// GDI name of a virtual monitor (attached or not), if one is plugged in.
 pub fn find_device() -> Option<String> {
+    find_devices().into_iter().next()
+}
+
+/// GDI names of every plugged-in virtual monitor (attached or not).
+pub fn find_devices() -> Vec<String> {
+    let mut found = Vec::new();
     unsafe {
         let mut adapter = DISPLAY_DEVICEW { cb: size_of::<DISPLAY_DEVICEW>() as u32, ..Default::default() };
         let mut i = 0;
@@ -167,11 +233,11 @@ pub fn find_device() -> Option<String> {
             if EnumDisplayDevicesW(PCWSTR(name.as_ptr()), 0, &mut monitor, EDD_GET_DEVICE_INTERFACE_NAME).as_bool()
                 && from_wide(&monitor.DeviceID).contains(MONITOR_ID)
             {
-                return Some(from_wide(&adapter.DeviceName));
+                found.push(from_wide(&adapter.DeviceName));
             }
         }
-        None
     }
+    found
 }
 
 fn current_size(device: &str) -> Option<(u32, u32)> {
@@ -206,6 +272,15 @@ mod tests {
     use super::*;
 
     const STOCK: &str = "<vdd_settings>\n<global>\n<g_refresh_rate>60</g_refresh_rate>\n<g_refresh_rate>144</g_refresh_rate>\n</global>\n<resolutions>\n<resolution>\n<width>800</width>\n<height>600</height>\n<refresh_rate>30</refresh_rate>\n</resolution>\n</resolutions>\n</vdd_settings>\n";
+
+    #[test]
+    fn sets_monitor_count() {
+        let xml = "<monitors>
+<count>1</count>
+</monitors>
+<resolutions></resolutions>";
+        assert!(with_modes(xml, &[]).unwrap().contains(&format!("<count>{MAX_TABLETS}</count>")));
+    }
 
     #[test]
     fn trims_stock_modes_and_adds_ours_once() {

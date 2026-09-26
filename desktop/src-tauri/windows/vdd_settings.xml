@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <vdd_settings>
     <monitors>
-        <count>1</count>
+        <count>2</count>
     </monitors>
     <gpu>
         <friendlyname>default</friendlyname>
