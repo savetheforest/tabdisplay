@@ -121,6 +121,11 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        if (isFinishing) {
+            stream?.close()
+            stream = null
+            SessionService.stop(this)
+        }
         stopDiscovery()
         super.onDestroy()
     }
@@ -333,7 +338,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** The video surface. Surface lifetime == session lifetime: leaving the app disconnects, coming back reconnects. */
+    /** The video surface. The session outlives it: on lock / app switch only the decoder stops (see [Stream.detach]). */
     @SuppressLint("ClickableViewAccessibility")
     private fun surface(context: Context, target: Screen.Display): SurfaceView {
         val view = SurfaceView(context)
@@ -343,6 +348,9 @@ class MainActivity : ComponentActivity() {
                 val bounds = windowManager.currentWindowMetrics.bounds
                 val (w, h) = decodableSize(bounds.width(), bounds.height())
                 sentSize = w to h
+                // Coming back from lock / another app: the session is still alive, just give it the new surface.
+                stream?.let { it.attach(holder.surface, w, h); return }
+                SessionService.start(this@MainActivity, target.name)
                 val hello = JSONObject()
                     .put("v", 2)
                     .put("device_id", deviceId)
@@ -378,8 +386,7 @@ class MainActivity : ComponentActivity() {
             }
 
             override fun surfaceDestroyed(holder: SurfaceHolder) {
-                stream?.close()
-                stream = null
+                stream?.detach()
             }
         })
         // Every finger and the pen (including hovering) go to the PC as one INPUT frame per event.
@@ -418,6 +425,7 @@ class MainActivity : ComponentActivity() {
 
     private fun endSession(reason: String?) {
         stream = null
+        SessionService.stop(this)
         pairing = null
         video = null
         stats = null
