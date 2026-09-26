@@ -56,17 +56,19 @@ fn status() -> serde_json::Value {
         .and_then(|s| s.connect("8.8.8.8:80").and(s.local_addr()))
         .map(|a| a.ip().to_string())
         .unwrap_or_else(|_| "?".into());
+    let sessions = server::sessions();
     let pairing = pairing::current().map(|(code, device)| serde_json::json!({ "code": code, "device": device }));
     serde_json::json!({
         "ip": ip,
         "name": server::computer_name(),
-        "status": server::STATUS.lock().unwrap().clone(),
+        "status": sessions.first().map_or_else(|| server::STATUS.lock().unwrap().clone(), |s| s.status.clone()),
         "driver": display::driver_state(),
         "usb": *USB.lock().unwrap(),
         "pairing": pairing,
         "profile": settings::get().profile,
-        "stats": server::STATS.lock().unwrap().clone(),
-        "session": server::SESSION.lock().unwrap().clone(),
+        "stats": sessions.first().and_then(|s| s.stats.clone()),
+        "session": (!sessions.is_empty()).then(|| sessions.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(" + ")),
+        "sessions": sessions,
     })
 }
 
@@ -94,8 +96,8 @@ fn set_settings(settings: Settings) {
 /// Choices for the UI: (attached monitors as (name, w, h), extend resolution presets).
 #[tauri::command]
 fn options() -> (Vec<(String, u32, u32)>, &'static [(u32, u32)]) {
-    let virtual_monitor = display::find_device();
-    let monitors = capture::monitors().into_iter().filter(|m| Some(&m.0) != virtual_monitor.as_ref()).collect();
+    let virtual_monitors = display::find_devices();
+    let monitors = capture::monitors().into_iter().filter(|m| !virtual_monitors.contains(&m.0)).collect();
     (monitors, display::PRESETS)
 }
 

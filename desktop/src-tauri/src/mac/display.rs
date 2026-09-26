@@ -8,6 +8,7 @@ use objc2::msg_send;
 use objc2::runtime::{AnyClass, AnyObject, Bool};
 use std::ffi::{c_void, CStr};
 use std::io;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 
 /// Offered in the UI (the tablet's own size is always available too).
@@ -95,8 +96,10 @@ unsafe extern "C" {
     fn dispatch_get_global_queue(identifier: isize, flags: usize) -> *mut AnyObject;
 }
 
-/// The live virtual monitor's CGDirectDisplayID.
-static CURRENT: Mutex<Option<u32>> = Mutex::new(None);
+/// The live virtual monitors' CGDirectDisplayIDs (one per connected tablet).
+static CURRENT: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+/// Gives each virtual monitor its own serial number, so macOS doesn't take two tablets for one screen.
+static SERIAL: AtomicU32 = AtomicU32::new(1);
 
 pub struct VirtualDisplay {
     /// CGDirectDisplayID as text (what capture::open takes).
@@ -113,7 +116,7 @@ impl Drop for VirtualDisplay {
         unsafe {
             let _: () = msg_send![self.display, release];
         }
-        *CURRENT.lock().unwrap() = None;
+        CURRENT.lock().unwrap().retain(|&id| id != self.id);
     }
 }
 
@@ -125,9 +128,9 @@ pub fn driver_state() -> &'static str {
     }
 }
 
-/// Id of the virtual monitor, if one is up (so the UI can leave it out of the mirror list).
-pub fn find_device() -> Option<String> {
-    CURRENT.lock().unwrap().map(|id| id.to_string())
+/// Ids of the virtual monitors that are up (so the UI can leave them out of the mirror list).
+pub fn find_devices() -> Vec<String> {
+    CURRENT.lock().unwrap().iter().map(u32::to_string).collect()
 }
 
 fn class(name: &CStr) -> io::Result<&'static AnyClass> {
@@ -152,7 +155,7 @@ pub fn attach(w: u32, h: u32, hz: u32, pos: Position) -> io::Result<VirtualDispl
         let _: () = msg_send![desc, setSizeInMillimeters: CGSize { width: 250.0, height: 156.0 }];
         let _: () = msg_send![desc, setVendorID: 0x5444u32];
         let _: () = msg_send![desc, setProductID: 0x0001u32];
-        let _: () = msg_send![desc, setSerialNum: 0x0001u32];
+        let _: () = msg_send![desc, setSerialNum: SERIAL.fetch_add(1, Ordering::Relaxed)];
 
         let alloc: *mut AnyObject = msg_send![class(c"CGVirtualDisplay")?, alloc];
         let display: *mut AnyObject = msg_send![alloc, initWithDescriptor: desc];
@@ -161,7 +164,7 @@ pub fn attach(w: u32, h: u32, hz: u32, pos: Position) -> io::Result<VirtualDispl
             return Err(io::Error::other("o macOS não criou o monitor virtual"));
         }
         let id: u32 = msg_send![display, displayID];
-        *CURRENT.lock().unwrap() = Some(id);
+        CURRENT.lock().unwrap().push(id);
         let mut vd = VirtualDisplay { device: id.to_string(), id, display };
         vd.configure(w, h, hz, pos)?;
         Ok(vd)
@@ -200,13 +203,21 @@ impl VirtualDisplay {
                 let b = CGDisplayBounds(self.id);
                 eprintln!("virtual display {} asked {w}x{h}@{hz} px, bounds {}x{} pt, pixels {:?}", self.id, b.size.width, b.size.height, super::capture::pixel_size(self.id));
             }
-            let main = CGDisplayBounds(CGMainDisplayID());
-            let (mw, mh) = (main.size.width as i32, main.size.height as i32);
+            // Next to the main display and the other tablets' monitors.
+            let (mut l, mut t, mut r, mut b) = {
+                let m = CGDisplayBounds(CGMainDisplayID());
+                (m.origin.x as i32, m.origin.y as i32, (m.origin.x + m.size.width) as i32, (m.origin.y + m.size.height) as i32)
+            };
+            for &other in CURRENT.lock().unwrap().iter().filter(|&&o| o != self.id) {
+                let o = CGDisplayBounds(other);
+                (l, t) = (l.min(o.origin.x as i32), t.min(o.origin.y as i32));
+                (r, b) = (r.max((o.origin.x + o.size.width) as i32), b.max((o.origin.y + o.size.height) as i32));
+            }
             let (x, y) = match pos {
-                Position::Right => (mw, 0),
-                Position::Left => (-(pw as i32), 0),
-                Position::Above => (0, -(ph as i32)),
-                Position::Below => (0, mh),
+                Position::Right => (r, 0),
+                Position::Left => (l - pw as i32, 0),
+                Position::Above => (0, t - ph as i32),
+                Position::Below => (0, b),
             };
             let mut config = std::ptr::null_mut();
             if CGBeginDisplayConfiguration(&mut config) == 0 {

@@ -20,6 +20,7 @@ pub fn spawn(alive: impl Fn() -> bool + Send + 'static, enabled: impl Fn() -> bo
         let Ok(mut encoder) = OpusEncoder::new(RATE as i32, CHANNELS, Application::Audio) else { return };
         encoder.bitrate_bps = BITRATE;
         let (mut loopback, mut pcm, mut packet) = (None, Vec::<f32>::new(), vec![0u8; 1500]);
+        let mut quiet = 0u32; // consecutive silent frames
         while alive() {
             if !enabled() {
                 loopback = None; // release the device while audio is off
@@ -38,8 +39,12 @@ pub fn spawn(alive: impl Fn() -> bool + Send + 'static, enabled: impl Fn() -> bo
                 continue;
             }
             while pcm.len() >= FRAME * CHANNELS {
-                if let Ok(n) = encoder.encode(&pcm[..FRAME * CHANNELS], FRAME, &mut packet) {
-                    let _ = tx.try_send(packet[..n].to_vec());
+                // WASAPI hands out zeros while nothing plays: send a second of them (so tails ring out), then nothing.
+                quiet = if pcm[..FRAME * CHANNELS].iter().all(|&v| v == 0.0) { quiet + 1 } else { 0 };
+                if quiet <= 50 {
+                    if let Ok(n) = encoder.encode(&pcm[..FRAME * CHANNELS], FRAME, &mut packet) {
+                        let _ = tx.try_send(packet[..n].to_vec());
+                    }
                 }
                 pcm.drain(..FRAME * CHANNELS);
             }

@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 use std::io::{self, Read, Write};
 use crate::tls::{self, Accepted, Conn};
 use std::net::{Shutdown, TcpListener};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -36,14 +36,79 @@ pub const PROFILE: u8 = 14;
 pub const AUDIO: u8 = 15;
 const MAX_MSG: usize = 16 << 20;
 
+/// Tablets that can be connected at once (the Windows driver offers as many virtual monitors).
+pub const MAX_TABLETS: usize = 2;
+
+/// What the PC says while no tablet is connected ("Aguardando tablet", a port error...).
 pub static STATUS: Mutex<String> = Mutex::new(String::new());
-/// "Redmi Pad 2 · USB" while a tablet is connected.
-pub static SESSION: Mutex<Option<String>> = Mutex::new(None);
+
+/// What the UI shows about one connected tablet.
+#[derive(Clone, Serialize)]
+pub struct SessionInfo {
+    pub id: u64,
+    /// "Redmi Pad 2 · USB"
+    pub name: String,
+    pub status: String,
+    pub stats: Option<Stats>,
+}
+
+struct Entry {
+    info: SessionInfo,
+    device_id: String,
+    /// To end the session from outside (the same tablet reconnecting).
+    conn: Conn,
+}
+
+static SESSIONS: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+/// One tablet pairs at a time: there is a single code on the PC screen.
+static PAIRING: Mutex<()> = Mutex::new(());
+
+pub fn sessions() -> Vec<SessionInfo> {
+    SESSIONS.lock().unwrap().iter().map(|e| e.info.clone()).collect()
+}
+
+/// Adds a tablet to the live sessions. A tablet that reconnects replaces its own stale session.
+fn register(device_id: &str, name: String, conn: Conn) -> Result<Registered, String> {
+    let mut all = SESSIONS.lock().unwrap();
+    if let Some(i) = all.iter().position(|e| e.device_id == device_id) {
+        let _ = all.remove(i).conn.shutdown(Shutdown::Both);
+    }
+    if all.len() >= MAX_TABLETS {
+        return Err(format!("O TabDisplay já está com {MAX_TABLETS} tablets conectados. Desconecte um deles primeiro."));
+    }
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    let status = format!("Conectado: {name}");
+    eprintln!("status: {status}");
+    all.push(Entry { info: SessionInfo { id, name, status, stats: None }, device_id: device_id.into(), conn });
+    Ok(Registered(id))
+}
+
+/// Removes the session when the connection's thread is done, however it ends.
+struct Registered(u64);
+
+impl Drop for Registered {
+    fn drop(&mut self) {
+        SESSIONS.lock().unwrap().retain(|e| e.info.id != self.0);
+    }
+}
+
+fn with_session(id: u64, f: impl FnOnce(&mut SessionInfo)) {
+    if let Some(e) = SESSIONS.lock().unwrap().iter_mut().find(|e| e.info.id == id) {
+        f(&mut e.info);
+    }
+}
 
 fn set_status(s: impl Into<String>) {
     let s = s.into();
     eprintln!("status: {s}");
     *STATUS.lock().unwrap() = s;
+}
+
+fn set_session_status(id: u64, s: impl Into<String>) {
+    let s = s.into();
+    eprintln!("status [{id}]: {s}");
+    with_session(id, |info| info.status = s);
 }
 
 pub fn write_msg(w: &mut impl Write, kind: u8, payload: &[u8]) -> io::Result<()> {
@@ -113,7 +178,7 @@ pub fn beacon() {
     }
 }
 
-/// Accepts one tablet at a time, forever.
+/// Accepts tablets forever; each connection gets its own thread.
 pub fn run() {
     let listener = match TcpListener::bind(("0.0.0.0", PORT)) {
         Ok(l) => l,
@@ -121,22 +186,23 @@ pub fn run() {
     };
     set_status("Aguardando tablet");
     for stream in listener.incoming().flatten() {
-        let conn = match tls::accept(stream) {
-            Ok(Accepted::Tls(conn)) => conn,
-            Ok(Accepted::Plain(mut old)) => {
-                // Protocol 2 was plaintext: the message reaches the old app as a plain ERROR.
-                let _ = refuse(&mut old, "Este TabDisplay do PC é mais novo (conexão criptografada): atualize o app do tablet.");
-                continue;
+        thread::spawn(move || {
+            let conn = match tls::accept(stream) {
+                Ok(Accepted::Tls(conn)) => conn,
+                Ok(Accepted::Plain(mut old)) => {
+                    // Protocol 2 was plaintext: the message reaches the old app as a plain ERROR.
+                    let _ = refuse(&mut old, "Este TabDisplay do PC é mais novo (conexão criptografada): atualize o app do tablet.");
+                    return;
+                }
+                Err(_) => return, // probe or a client that fumbled the handshake: not a session
+            };
+            match handle(conn) {
+                // The tablet's USB probe connects and hangs up without a HELLO: not a session.
+                Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {}
+                Err(e) => eprintln!("session ended: {e}"),
+                Ok(()) => {}
             }
-            Err(_) => continue, // probe or a client that fumbled the handshake: not a session
-        };
-        match handle(conn) {
-            // The tablet's USB probe connects and hangs up without a HELLO: not a session.
-            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => continue,
-            Err(e) => eprintln!("session ended: {e}"),
-            Ok(()) => {}
-        }
-        set_status("Aguardando tablet");
+        });
     }
 }
 
@@ -174,10 +240,11 @@ pub struct Stats {
     pub reduced: bool,
 }
 
-pub static STATS: Mutex<Option<Stats>> = Mutex::new(None);
 
 /// What a session's reader thread (tablet -> PC) shares with its streaming loop.
 struct Shared {
+    /// Key of this tablet's entry in `SESSIONS`.
+    id: u64,
     start: Instant,
     alive: AtomicBool,
     target: Mutex<Target>,
@@ -236,13 +303,20 @@ fn handle(mut stream: Conn) -> io::Result<()> {
     // USB arrives through `adb reverse` on loopback: the cable is proof enough. Wi-Fi needs pairing.
     let usb = stream.peer_addr()?.ip().is_loopback();
     if !usb && !pairing::is_paired(&hello.device_id, &hello.token) {
+        let Ok(_pairing) = PAIRING.try_lock() else {
+            return Err(refuse(&mut stream, "Outro tablet está sendo pareado agora. Tente de novo em instantes."));
+        };
         pair(&mut stream, &hello).inspect_err(|_| pairing::cancel())?;
     }
     let session = format!("{} · {}", hello.device_name, if usb { "USB" } else { "Wi‑Fi" });
-    set_status(format!("Conectado: {session}"));
-    *SESSION.lock().unwrap() = Some(session);
+    let registered = match register(&hello.device_id, session, stream.try_clone()?) {
+        Ok(r) => r,
+        Err(message) => return Err(refuse(&mut stream, &message)),
+    };
+    let id = registered.0;
 
     let shared = Arc::new(Shared {
+        id,
         start: Instant::now(),
         alive: AtomicBool::new(true),
         target: Mutex::new(None),
@@ -313,9 +387,8 @@ fn handle(mut stream: Conn) -> io::Result<()> {
     while shared.alive.load(Ordering::Relaxed) && result.is_ok() {
         result = stream_once(&mut stream, &shared, &mut virtual_display, &audio);
     }
-    *STATS.lock().unwrap() = None;
-    *SESSION.lock().unwrap() = None;
     drop(virtual_display);
+    drop(registered);
     let _ = stream.shutdown(Shutdown::Both);
     result
 }
@@ -408,7 +481,7 @@ fn stream_once(stream: &mut Conn, shared: &Shared, virtual_display: &mut Option<
     let (cw, ch) = (cap.width, cap.height);
     let (mut encode, kind) = encoder(cw, ch, fps, mbps, s.encoder)?;
     label += &format!(" {cw}x{ch} · {fps} fps · {mbps} Mbps · {kind}");
-    set_status(label);
+    set_session_status(shared.id, label);
 
     send_json(stream, CONFIG, &json!({ "width": cw, "height": ch }))?;
     // Tell the tablet which preset is active (a rebuild after either side changed it lands here).
@@ -425,13 +498,13 @@ fn stream_once(stream: &mut Conn, shared: &Shared, virtual_display: &mut Option<
     const FLUSH: Duration = Duration::from_millis(250);
     let mut last_change = Instant::now() - FLUSH;
     // Fell back to mirroring because the driver was down: switch to extending once it's back.
-    let waiting_for_driver = s.mode == Mode::Extend && virtual_display.is_none() && display::find_device().is_none();
+    let waiting_for_driver = s.mode == Mode::Extend && virtual_display.is_none() && display::find_devices().is_empty();
     // Once a second: ping for the round trip, and publish stats for the UI.
     let mut tick = Instant::now();
     let (mut frames, mut bytes, mut encode_time) = (0u32, 0usize, Duration::ZERO);
     while shared.alive.load(Ordering::Relaxed) && settings::VERSION.load(Ordering::Relaxed) == version && !shared.rebuild.swap(false, Ordering::Relaxed) {
         if tick.elapsed() >= Duration::from_secs(1) {
-            if waiting_for_driver && display::find_device().is_some() {
+            if waiting_for_driver && !display::find_devices().is_empty() {
                 break;
             }
             let secs = tick.elapsed().as_secs_f32();
@@ -451,7 +524,7 @@ fn stream_once(stream: &mut Conn, shared: &Shared, virtual_display: &mut Option<
             }
             // The tablet echoes `t` (round trip) and may show the rest in its stats overlay.
             let ping = json!({ "t": shared.start.elapsed().as_millis() as u64, "rtt_ms": stats.rtt_ms, "fps": stats.fps.round(), "mbps": stats.mbps });
-            *STATS.lock().unwrap() = Some(stats);
+            with_session(shared.id, |info| info.stats = Some(stats.clone()));
             send_json(stream, PING, &ping)?;
             (tick, frames, bytes, encode_time) = (Instant::now(), 0, 0, Duration::ZERO);
         }
