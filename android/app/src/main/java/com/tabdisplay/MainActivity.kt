@@ -408,7 +408,10 @@ class MainActivity : ComponentActivity() {
             Input.encode(e, v.width, v.height)?.let { stream?.input(it) }
             true
         }
-        view.setOnGenericMotionListener { v, e -> Input.encode(e, v.width, v.height)?.let { stream?.input(it) } != null }
+        view.setOnGenericMotionListener { v, e ->
+            Input.scroll(e, v.width, v.height)?.let { stream?.scroll(it) } != null ||
+                Input.encode(e, v.width, v.height)?.let { stream?.input(it) } != null
+        }
         return view
     }
 

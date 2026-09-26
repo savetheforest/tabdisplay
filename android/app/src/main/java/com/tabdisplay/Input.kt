@@ -18,6 +18,15 @@ object Input {
     private const val HOVER = 3
     private const val LEAVE = 4
 
+    /** A mouse wheel / trackpad scroll as a SCROLL payload `[x f32][y f32][dx f32][dy f32]`; null for other events. */
+    fun scroll(e: MotionEvent, width: Int, height: Int): ByteArray? {
+        if (e.actionMasked != MotionEvent.ACTION_SCROLL) return null
+        return ByteBuffer.allocate(16)
+            .putFloat(e.x / width).putFloat(e.y / height)
+            .putFloat(e.getAxisValue(MotionEvent.AXIS_HSCROLL)).putFloat(e.getAxisValue(MotionEvent.AXIS_VSCROLL))
+            .array()
+    }
+
     /** Null for events that carry nothing for the PC. */
     fun encode(e: MotionEvent, width: Int, height: Int): ByteArray? {
         val action = e.actionMasked

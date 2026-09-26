@@ -39,6 +39,7 @@ private const val RESIZE = 9
 private const val PING = 10
 private const val PONG = 11
 private const val STATS = 12
+private const val SCROLL = 13
 private const val MAX_MSG = 16 shl 20
 
 /** What a session reports back to the UI. Called from the stream thread. */
@@ -127,6 +128,9 @@ class Stream(
 
     /** One INPUT frame: every touch/pen contact of a MotionEvent, already encoded (see [Input]). */
     fun input(frame: ByteArray) = send(INPUT) { write(frame) }
+
+    /** One SCROLL frame (mouse wheel / trackpad), already encoded (see [Input.scroll]). */
+    fun scroll(frame: ByteArray) = send(SCROLL) { write(frame) }
 
     /** The tablet rotated: ask for video (and a virtual monitor) of the new decodable size. */
     fun resize(width: Int, height: Int) = sendJson(RESIZE, JSONObject().put("decodable", org.json.JSONArray(listOf(width, height))))

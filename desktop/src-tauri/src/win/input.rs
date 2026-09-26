@@ -1,7 +1,7 @@
 //! Tablet input -> Windows. Touch and pen are injected as real Windows touch/pen (synthetic pointer
 //! devices), so Windows itself provides scrolling, pinch zoom, press-and-hold right click, Windows Ink and
 //! pen pressure. "Mouse" mode turns the first finger into a plain mouse for apps that ignore touch.
-use crate::input::{Action, Contact, Kind};
+use crate::input::{Action, Contact, Kind, Scroll};
 use windows::Win32::Foundation::{POINT, RECT};
 use windows::Win32::UI::Controls::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
@@ -60,6 +60,27 @@ impl Injector {
         }
         if let Some(pen) = frame.iter().find(|c| c.kind == Kind::Pen) {
             self.pen(pen, rect);
+        }
+    }
+
+    /// Moves the mouse to the point and turns the wheel there (Windows sends it to the window under the cursor).
+    pub fn scroll(&mut self, s: &Scroll, rect: Rect) {
+        const NOTCH: f32 = 120.0; // WHEEL_DELTA
+        let at = Contact { id: 0, kind: Kind::Touch, action: Action::Move, x: s.x, y: s.y, pressure: 0.0, tilt_x: 0, tilt_y: 0, barrel: false, eraser: false };
+        mouse(&at, rect);
+        let wheel = |flag: MOUSE_EVENT_FLAGS, amount: f32| INPUT {
+            r#type: INPUT_MOUSE,
+            Anonymous: INPUT_0 { mi: MOUSEINPUT { mouseData: (amount * NOTCH).round() as i32 as u32, dwFlags: flag, ..Default::default() } },
+        };
+        let mut inputs = Vec::new();
+        if s.dy != 0.0 {
+            inputs.push(wheel(MOUSEEVENTF_WHEEL, s.dy));
+        }
+        if s.dx != 0.0 {
+            inputs.push(wheel(MOUSEEVENTF_HWHEEL, s.dx));
+        }
+        if !inputs.is_empty() {
+            unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) };
         }
     }
 

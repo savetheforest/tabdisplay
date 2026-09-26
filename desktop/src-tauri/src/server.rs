@@ -29,6 +29,7 @@ pub const RESIZE: u8 = 9;
 pub const PING: u8 = 10;
 pub const PONG: u8 = 11;
 pub const STATS_MSG: u8 = 12;
+pub const SCROLL: u8 = 13;
 const MAX_MSG: usize = 16 << 20;
 
 pub static STATUS: Mutex<String> = Mutex::new(String::new());
@@ -207,6 +208,12 @@ fn handle(mut stream: TcpStream) -> io::Result<()> {
                     let target = *reader.target.lock().unwrap();
                     if let (Some((rect, as_mouse)), Some(frame)) = (target, crate::input::parse(&p)) {
                         injector.inject(&frame, rect, as_mouse);
+                    }
+                }
+                SCROLL => {
+                    let target = *reader.target.lock().unwrap();
+                    if let (Some((rect, _)), Some(s)) = (target, crate::input::parse_scroll(&p)) {
+                        injector.scroll(&s, rect);
                     }
                 }
                 RESIZE => {
