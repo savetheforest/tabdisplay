@@ -45,6 +45,50 @@ unsafe extern "C" {
     fn CGBeginDisplayConfiguration(config: *mut *mut c_void) -> i32;
     fn CGConfigureDisplayOrigin(config: *mut c_void, display: u32, x: i32, y: i32) -> i32;
     fn CGCompleteDisplayConfiguration(config: *mut c_void, option: u32) -> i32;
+    fn CGConfigureDisplayWithDisplayMode(config: *mut c_void, display: u32, mode: *const c_void, options: *const c_void) -> i32;
+    fn CGDisplayCopyAllDisplayModes(display: u32, options: *const c_void) -> *const c_void;
+    fn CGDisplayModeGetWidth(mode: *const c_void) -> usize;
+    fn CGDisplayModeGetPixelWidth(mode: *const c_void) -> usize;
+    fn CGDisplayModeGetPixelHeight(mode: *const c_void) -> usize;
+    static kCGDisplayShowDuplicateLowResolutionModes: *const c_void;
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {
+    static kCFBooleanTrue: *const c_void;
+    static kCFTypeDictionaryKeyCallBacks: c_void;
+    static kCFTypeDictionaryValueCallBacks: c_void;
+    fn CFDictionaryCreate(allocator: *const c_void, keys: *const *const c_void, values: *const *const c_void, count: isize, key_cb: *const c_void, value_cb: *const c_void) -> *const c_void;
+    fn CFArrayGetCount(array: *const c_void) -> isize;
+    fn CFArrayGetValueAtIndex(array: *const c_void, index: isize) -> *const c_void;
+    fn CFRelease(cf: *const c_void);
+}
+
+/// Runs `f` with the display's mode that is `pw` points wide and `w`x`h` pixels (the Retina variant),
+/// if macOS offers one. The low-resolution duplicates are only listed when asked for.
+unsafe fn with_retina_mode(id: u32, pw: u32, w: u32, h: u32, f: impl FnOnce(*const c_void)) {
+    unsafe {
+        let options = CFDictionaryCreate(
+            std::ptr::null(),
+            &kCGDisplayShowDuplicateLowResolutionModes,
+            &kCFBooleanTrue,
+            1,
+            &kCFTypeDictionaryKeyCallBacks,
+            &kCFTypeDictionaryValueCallBacks,
+        );
+        let modes = CGDisplayCopyAllDisplayModes(id, options);
+        CFRelease(options);
+        if modes.is_null() {
+            return;
+        }
+        let found = (0..CFArrayGetCount(modes)).map(|i| CFArrayGetValueAtIndex(modes, i)).find(|&m| {
+            CGDisplayModeGetWidth(m) == pw as usize && CGDisplayModeGetPixelWidth(m) == w as usize && CGDisplayModeGetPixelHeight(m) == h as usize
+        });
+        if let Some(mode) = found {
+            f(mode);
+        }
+        CFRelease(modes);
+    }
 }
 
 unsafe extern "C" {
@@ -166,8 +210,15 @@ impl VirtualDisplay {
             };
             let mut config = std::ptr::null_mut();
             if CGBeginDisplayConfiguration(&mut config) == 0 {
+                // macOS starts the monitor in the 1x variant of the mode; pick the 2x (Retina) one.
+                with_retina_mode(self.id, pw, w, h, |mode| {
+                    CGConfigureDisplayWithDisplayMode(config, self.id, mode, std::ptr::null());
+                });
                 CGConfigureDisplayOrigin(config, self.id, x, y);
                 CGCompleteDisplayConfiguration(config, 1); // kCGConfigureForSession
+            }
+            if std::env::var_os("TABDISPLAY_DEBUG").is_some() {
+                eprintln!("after retina switch: pixels {:?}", super::capture::pixel_size(self.id));
             }
         }
         Ok(())
