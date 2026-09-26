@@ -84,13 +84,16 @@ pub fn pixel_size(id: u32) -> (usize, usize) {
 }
 
 impl Capture {
-    /// Captures the display whose CGDirectDisplayID is `device`, or the main display if None.
-    pub fn open(device: Option<&str>) -> Result<Self, String> {
+    /// Captures the display whose CGDirectDisplayID is `device`, or the main display if None, scaled
+    /// (on the GPU, by ScreenCaptureKit) to `fit(pixel size)` so the tablet's decoder can take it.
+    pub fn open(device: Option<&str>, fit: impl Fn((u32, u32)) -> (u32, u32)) -> Result<Self, String> {
         let content = SCShareableContent::get().map_err(|e| format!("sem permissão de Gravação de Tela? ({e:?})"))?;
         let want = device.and_then(|d| d.parse::<u32>().ok()).unwrap_or_else(|| unsafe { CGMainDisplayID() });
         let display = content.displays().into_iter().find(|d| d.display_id() == want).ok_or("monitor não encontrado")?;
         let id = display.display_id();
-        let (width, height) = pixel_size(id);
+        let (pw, ph) = pixel_size(id);
+        let (fw, fh) = fit((pw as u32, ph as u32));
+        let (width, height) = (fw as usize, fh as usize);
         let b = unsafe { CGDisplayBounds(id) };
         let rect = (b.origin.x as i32, b.origin.y as i32, (b.origin.x + b.size.width) as i32, (b.origin.y + b.size.height) as i32);
 

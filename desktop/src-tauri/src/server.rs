@@ -304,7 +304,7 @@ fn stream_once(stream: &mut TcpStream, shared: &Shared, virtual_display: &mut Op
         None if s.mode == Mode::Mirror => s.mirror_monitor.clone(),
         None => None,
     };
-    let mut cap = open_capture(device.as_deref())?;
+    let mut cap = open_capture(device.as_deref(), tablet)?;
     *shared.target.lock().unwrap() = s.touch.then_some((cap.rect, s.touch_mode == TouchMode::Mouse));
     let (cw, ch) = (cap.width, cap.height);
     let (mut encode, kind) = encoder(cw, ch, fps, mbps, s.encoder)?;
@@ -385,15 +385,15 @@ fn fit((w, h): (u32, u32), (tw, th): (u32, u32)) -> (u32, u32) {
 }
 
 /// A just-attached monitor takes a moment to show up in DXGI; unknown monitors fall back to primary.
-fn open_capture(device: Option<&str>) -> io::Result<Capture> {
+fn open_capture(device: Option<&str>, tablet: (u32, u32)) -> io::Result<Capture> {
     let deadline = Instant::now() + Duration::from_secs(3);
     loop {
-        match Capture::open(device) {
+        match Capture::open(device, |size| fit(size, tablet)) {
             Ok(c) => return Ok(c),
             Err(_) if Instant::now() < deadline => thread::sleep(Duration::from_millis(100)),
             Err(e) if device.is_some() => {
                 eprintln!("capture {device:?} failed ({e}), using primary");
-                return Capture::open(None).map_err(io::Error::other);
+                return Capture::open(None, |size| fit(size, tablet)).map_err(io::Error::other);
             }
             Err(e) => return Err(io::Error::other(e)),
         }

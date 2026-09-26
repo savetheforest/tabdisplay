@@ -22,7 +22,9 @@ pub struct Capture {
 
 impl Capture {
     /// Duplicates the monitor with GDI name `device` (e.g. `\\.\DISPLAY5`), or the primary one if None.
-    pub fn open(device: Option<&str>) -> Result<Self> {
+    /// ponytail: `_fit` (the size the tablet can decode) is ignored: Desktop Duplication can't scale, so a
+    /// mirrored monitor bigger than the tablet's decoder (e.g. 4K) needs a GPU scaler (VideoProcessor MFT).
+    pub fn open(device: Option<&str>, _fit: impl Fn((u32, u32)) -> (u32, u32)) -> Result<Self> {
         unsafe {
             let (adapter, output) = find_output(device)?;
             let (mut device, mut ctx) = (None, None);
