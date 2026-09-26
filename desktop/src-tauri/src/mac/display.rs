@@ -106,6 +106,8 @@ pub struct VirtualDisplay {
     pub device: String,
     id: u32,
     display: *mut AnyObject,
+    /// What `configure` last applied; repeating it would reconfigure the desktop for the other tablets too.
+    applied: Option<(u32, u32, u32, Position)>,
 }
 
 // The object is only created, configured and released by the session thread that owns it.
@@ -165,7 +167,7 @@ pub fn attach(w: u32, h: u32, hz: u32, pos: Position) -> io::Result<VirtualDispl
         }
         let id: u32 = msg_send![display, displayID];
         CURRENT.lock().unwrap().push(id);
-        let mut vd = VirtualDisplay { device: id.to_string(), id, display };
+        let mut vd = VirtualDisplay { device: id.to_string(), id, display, applied: None };
         vd.configure(w, h, hz, pos)?;
         Ok(vd)
     }
@@ -176,6 +178,9 @@ impl VirtualDisplay {
     /// `w`x`h` are pixels; the monitor is Retina (HiDPI): `w/2`x`h/2` points drawn at 2x, like a real
     /// 11" tablet screen. (Measured: without HiDPI macOS halves the mode anyway, to 1x pixels.)
     pub fn configure(&mut self, w: u32, h: u32, hz: u32, pos: Position) -> io::Result<()> {
+        if self.applied == Some((w, h, hz, pos)) {
+            return Ok(());
+        }
         let (pw, ph) = (w / 2, h / 2);
         unsafe {
             let settings: *mut AnyObject = msg_send![class(c"CGVirtualDisplaySettings")?, new];
@@ -232,6 +237,7 @@ impl VirtualDisplay {
                 eprintln!("after retina switch: pixels {:?}", super::capture::pixel_size(self.id));
             }
         }
+        self.applied = Some((w, h, hz, pos));
         Ok(())
     }
 }
