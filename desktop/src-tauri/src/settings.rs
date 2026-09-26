@@ -66,7 +66,10 @@ pub static VERSION: AtomicU64 = AtomicU64::new(0);
 /// Loads settings from `dir/settings.json` (defaults if missing or invalid).
 pub fn init(dir: PathBuf) {
     let path = dir.join("settings.json");
-    let loaded = std::fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str(&s).ok());
+    // 0.1 used the identifier com.tabdisplay.app; carry its settings over once.
+    let old = dir.with_file_name("com.tabdisplay.app").join("settings.json");
+    let text = std::fs::read_to_string(&path).or_else(|_| std::fs::read_to_string(old));
+    let loaded = text.ok().and_then(|s| serde_json::from_str(&s).ok());
     *CURRENT.lock().unwrap() = Some(loaded.unwrap_or_default());
     let _ = PATH.set(path);
 }

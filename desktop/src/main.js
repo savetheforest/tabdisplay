@@ -2,19 +2,19 @@ const { invoke } = window.__TAURI__.core;
 const $ = (id) => document.getElementById(id);
 
 const DRIVER = {
-  ok: "Driver ativo.",
-  parado: "Driver parado: clique em Reiniciar driver (pede admin).",
+  ok: "Monitor virtual pronto.",
+  "sem-servico": "Serviço do TabDisplay parado: reinstale o app.",
   ausente: "Driver não instalado: só dá para espelhar.",
 };
 
 let settings;
 
 async function refresh() {
-  const [ip, status, driver, usb] = await invoke("status");
-  $("usb").textContent = usb || "Cabo USB: nenhum tablet (precisa da depuração USB ligada)";
-  $("ip").textContent = ip;
-  $("status").textContent = status;
-  $("driver").textContent = DRIVER[driver];
+  const s = await invoke("status");
+  $("usb").textContent = s.usb || "Cabo USB: nenhum tablet (precisa da depuração USB ligada)";
+  $("ip").textContent = s.ip;
+  $("status").textContent = s.pairing ? `Código para ${s.pairing.device}: ${s.pairing.code}` : s.status;
+  $("driver").textContent = DRIVER[s.driver];
 }
 
 function option(value, text) {

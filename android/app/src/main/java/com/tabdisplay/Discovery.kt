@@ -2,6 +2,7 @@ package com.tabdisplay
 
 import android.content.Context
 import android.net.wifi.WifiManager
+import org.json.JSONObject
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetSocketAddress
@@ -14,12 +15,13 @@ private const val USB_HOST = "127.0.0.1"
 private const val FORGET_AFTER_MS = 8000L // broadcasts arrive late on Wi-Fi in power save
 
 /**
- * Finds PCs to connect to: Wi-Fi ones from their UDP broadcast beacon ("TABDISPLAY <name>" on port 7071,
+ * Finds PCs to connect to: Wi-Fi ones from their UDP broadcast beacon (`TABDISPLAY {"id","name"}` on port 7071,
  * see PROTOCOL.md), and USB when `adb reverse` makes 127.0.0.1:7070 reachable. Calls [onChange] with the
  * current list whenever it changes, from a background thread.
  */
 class Discovery(context: Context, private val onChange: (List<Pc>) -> Unit) {
-    data class Pc(val name: String, val host: String) {
+    /** [id] identifies the PC across IP changes (pairing tokens are stored by it); null for USB. */
+    data class Pc(val id: String?, val name: String, val host: String) {
         val usb get() = host == USB_HOST
     }
 
@@ -55,8 +57,9 @@ class Discovery(context: Context, private val onChange: (List<Pc>) -> Unit) {
                 val packet = DatagramPacket(buf, buf.size)
                 socket.receive(packet)
                 val text = String(packet.data, 0, packet.length)
-                if (text.startsWith("TABDISPLAY ")) {
-                    see(Pc(text.removePrefix("TABDISPLAY ").trim(), packet.address.hostAddress ?: continue))
+                if (text.startsWith("TABDISPLAY {")) {
+                    val info = runCatching { JSONObject(text.removePrefix("TABDISPLAY ")) }.getOrNull() ?: continue
+                    see(Pc(info.optString("id"), info.optString("name", "PC"), packet.address.hostAddress ?: continue))
                 }
             } catch (_: SocketTimeoutException) {
             } catch (_: Exception) {
@@ -70,7 +73,7 @@ class Discovery(context: Context, private val onChange: (List<Pc>) -> Unit) {
     private fun probeUsb() {
         while (running) {
             val reachable = runCatching { Socket().use { it.connect(InetSocketAddress(USB_HOST, 7070), 300) } }.isSuccess
-            if (reachable) see(Pc("USB", USB_HOST))
+            if (reachable) see(Pc(null, "USB", USB_HOST))
             publish()
             Thread.sleep(2000)
         }

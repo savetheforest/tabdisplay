@@ -1,4 +1,5 @@
 mod encode;
+mod pairing;
 mod server;
 mod settings;
 #[cfg(windows)]
@@ -8,6 +9,7 @@ mod win {
     pub mod driver;
     pub mod encode;
     pub mod input;
+    pub mod service;
 }
 
 use settings::Settings;
@@ -16,22 +18,40 @@ use std::process::Command;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 use tauri::Manager;
-use win::{capture, display, driver};
+use win::{capture, display, driver, service};
 
 pub use win::driver::cli as driver_cli;
 
 /// Last result of the automatic `adb reverse`, shown in the UI.
 static USB: Mutex<&str> = Mutex::new("");
 
-/// (LAN IP, server status, virtual display driver state, USB state) for the UI.
+/// Everything the UI polls once a second.
 #[tauri::command]
-fn status() -> (String, String, &'static str, &'static str) {
+fn status() -> serde_json::Value {
     // Connecting a UDP socket sends nothing; it just makes the OS pick the outbound interface.
     let ip = UdpSocket::bind("0.0.0.0:0")
         .and_then(|s| s.connect("8.8.8.8:80").and(s.local_addr()))
         .map(|a| a.ip().to_string())
         .unwrap_or_else(|_| "?".into());
-    (ip, server::STATUS.lock().unwrap().clone(), display::driver_state(), *USB.lock().unwrap())
+    let pairing = pairing::current().map(|(code, device)| serde_json::json!({ "code": code, "device": device }));
+    serde_json::json!({
+        "ip": ip,
+        "name": server::computer_name(),
+        "status": server::STATUS.lock().unwrap().clone(),
+        "driver": display::driver_state(),
+        "usb": *USB.lock().unwrap(),
+        "pairing": pairing,
+    })
+}
+
+#[tauri::command]
+fn paired_devices() -> Vec<(String, String)> {
+    pairing::devices().into_iter().map(|d| (d.id, d.name)).collect()
+}
+
+#[tauri::command]
+fn forget_device(id: String) {
+    pairing::forget(&id);
 }
 
 #[tauri::command]
@@ -54,9 +74,8 @@ fn options() -> (Vec<(String, u32, u32)>, &'static [(u32, u32)]) {
 
 #[tauri::command]
 async fn restart_driver() -> String {
-    let _ = display::ensure_modes(&[]);
-    match display::restart_driver() {
-        Ok(()) => format!("Driver: {}", display::driver_state()),
+    match service::restart() {
+        Ok(()) => "Monitor virtual reiniciado.".into(),
         Err(e) => format!("Falhou: {e}"),
     }
 }
@@ -101,15 +120,23 @@ async fn install_apk() -> String {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // A second launch (Start menu, autostart) focuses the running window instead of fighting for port 7070.
+        .plugin(tauri_plugin_single_instance::init(|app, _, _| {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+        }))
         .setup(|app| {
             settings::init(app.path().app_config_dir()?);
-            let _ = display::ensure_modes(&[]);
+            pairing::init(app.path().app_config_dir()?);
             std::thread::spawn(server::run);
             std::thread::spawn(server::beacon);
             std::thread::spawn(usb_forward);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![status, get_settings, set_settings, options, restart_driver, install_apk])
+        .invoke_handler(tauri::generate_handler![status, get_settings, set_settings, options, restart_driver, install_apk, paired_devices, forget_device])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

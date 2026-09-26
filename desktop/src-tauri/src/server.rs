@@ -1,7 +1,10 @@
 //! TCP server + wire protocol. See PROTOCOL.md.
 use crate::encode::H264;
+use crate::pairing::{self, Check};
 use crate::settings::{self, Encoder, Mode, Settings};
 use crate::win::{capture::Capture, display, encode::MfEncoder, input};
+use serde::Deserialize;
+use serde_json::{json, Value};
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,10 +13,18 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 pub const PORT: u16 = 7070;
+pub const BEACON_PORT: u16 = 7071;
+const PROTOCOL: u32 = 2;
+
+// Message types. Control messages carry JSON; VIDEO and TOUCH are binary. See PROTOCOL.md.
 pub const HELLO: u8 = 1;
 pub const VIDEO: u8 = 2;
 pub const TOUCH: u8 = 3;
 pub const CONFIG: u8 = 4;
+pub const PAIR_REQUIRED: u8 = 5;
+pub const PAIR: u8 = 6;
+pub const PAIRED: u8 = 7;
+pub const ERROR: u8 = 8;
 const MAX_MSG: usize = 16 << 20;
 
 pub static STATUS: Mutex<String> = Mutex::new(String::new());
@@ -44,21 +55,28 @@ pub fn read_msg(r: &mut impl Read) -> io::Result<(u8, Vec<u8>)> {
     Ok((hdr[0], payload))
 }
 
-fn be_u32(p: &[u8], i: usize) -> u32 {
-    u32::from_be_bytes(p[i..i + 4].try_into().unwrap())
+fn send_json(w: &mut impl Write, kind: u8, v: &Value) -> io::Result<()> {
+    write_msg(w, kind, &serde_json::to_vec(v)?)
+}
+
+/// Tells the tablet why the session ends (it shows `message` as is), then fails the session.
+fn refuse(w: &mut impl Write, message: &str) -> io::Error {
+    let _ = send_json(w, ERROR, &json!({ "message": message }));
+    io::Error::new(io::ErrorKind::PermissionDenied, message.to_string())
 }
 
 fn be_f32(p: &[u8], i: usize) -> f32 {
     f32::from_be_bytes(p[i..i + 4].try_into().unwrap())
 }
 
-pub const BEACON_PORT: u16 = 7071;
+pub fn computer_name() -> String {
+    std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).unwrap_or_else(|_| "PC".into())
+}
 
 /// Announces this PC on the LAN once a second so tablets can list it without typing an IP.
-/// Payload: `TABDISPLAY <computer name>`; the tablet takes the address from the packet's source.
+/// Payload: `TABDISPLAY {"id":…,"name":…}`; the tablet takes the address from the packet's source.
 pub fn beacon() {
-    let name = std::env::var("COMPUTERNAME").unwrap_or_else(|_| "PC".into());
-    let msg = format!("TABDISPLAY {name}");
+    let msg = format!("TABDISPLAY {}", json!({ "id": pairing::pc_id(), "name": computer_name() }));
     let Ok(sock) = std::net::UdpSocket::bind("0.0.0.0:0") else { return };
     let _ = sock.set_broadcast(true);
     loop {
@@ -85,21 +103,33 @@ pub fn run() {
     }
 }
 
+#[derive(Deserialize)]
+struct Hello {
+    v: u32,
+    device_id: String,
+    device_name: String,
+    #[serde(default)]
+    token: String,
+    /// Largest size with the tablet screen's aspect ratio that its decoder handles.
+    decodable: (u32, u32),
+}
+
 type Rect = (i32, i32, i32, i32);
 
 fn handle(mut stream: TcpStream) -> io::Result<()> {
     stream.set_nodelay(true)?;
-    let (kind, hello) = read_msg(&mut stream)?;
-    if kind != HELLO || hello.len() != 12 {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "expected HELLO"));
+    let (kind, payload) = read_msg(&mut stream)?;
+    let hello = match serde_json::from_slice::<Hello>(&payload) {
+        Ok(h) if kind == HELLO && h.v == PROTOCOL => h,
+        _ => return Err(refuse(&mut stream, "Versões diferentes do TabDisplay no PC e no tablet: atualize os dois.")),
+    };
+    // USB arrives through `adb reverse` on loopback: the cable is proof enough. Wi-Fi needs pairing.
+    let usb = stream.peer_addr()?.ip().is_loopback();
+    if !usb && !pairing::is_paired(&hello.device_id, &hello.token) {
+        pair(&mut stream, &hello).inspect_err(|_| pairing::cancel())?;
     }
-    let peer = stream.peer_addr().map(|a| a.ip().to_string()).unwrap_or_default();
-    set_status(format!("Conectado: {}", if peer == "127.0.0.1" { "USB".to_string() } else { peer }));
-    let tablet = (be_u32(&hello, 0), be_u32(&hello, 4));
-    eprintln!("tablet {}x{} @ {}dpi", tablet.0, tablet.1, be_u32(&hello, 8));
-    if display::ensure_modes(&[tablet]).unwrap_or(false) {
-        eprintln!("new resolution written to the driver; it needs a restart to offer it");
-    }
+    set_status(format!("Conectado: {} ({})", hello.device_name, if usb { "USB" } else { "Wi‑Fi" }));
+    let tablet = hello.decodable;
 
     // Tablet -> PC: touches go to whatever rect is being streamed (None = touch off).
     // `alive` turns false when the tablet disconnects.
@@ -123,6 +153,31 @@ fn handle(mut stream: TcpStream) -> io::Result<()> {
     result
 }
 
+/// Shows a code on the PC and waits for the tablet to send it back. Ok = paired (token sent).
+fn pair(stream: &mut TcpStream, hello: &Hello) -> io::Result<()> {
+    set_status(format!("Pareando com {}", hello.device_name));
+    pairing::start(&hello.device_name);
+    let ask = |wrong: bool| json!({ "pc_id": pairing::pc_id(), "pc_name": computer_name(), "wrong": wrong });
+    send_json(stream, PAIR_REQUIRED, &ask(false))?;
+    stream.set_read_timeout(Some(Duration::from_secs(180)))?;
+    loop {
+        let (kind, p) = read_msg(stream)?;
+        if kind != PAIR {
+            continue;
+        }
+        let code = serde_json::from_slice::<Value>(&p).ok().and_then(|v| v["code"].as_str().map(String::from)).unwrap_or_default();
+        match pairing::check(&code) {
+            Check::Ok => {
+                let token = pairing::complete(&hello.device_id, &hello.device_name);
+                send_json(stream, PAIRED, &json!({ "pc_id": pairing::pc_id(), "token": token }))?;
+                return stream.set_read_timeout(None);
+            }
+            Check::Wrong => send_json(stream, PAIR_REQUIRED, &ask(true))?,
+            Check::Over => return Err(refuse(stream, "O código expirou ou teve tentativas demais. Conecte de novo para gerar outro.")),
+        }
+    }
+}
+
 /// Streams with the current settings until they change, capture is lost, or the tablet leaves.
 fn stream_once(stream: &mut TcpStream, tablet: (u32, u32), target: &Mutex<Option<Rect>>, alive: &AtomicBool) -> io::Result<()> {
     let version = settings::VERSION.load(Ordering::Relaxed);
@@ -132,7 +187,6 @@ fn stream_once(stream: &mut TcpStream, tablet: (u32, u32), target: &Mutex<Option
     let (_virtual, device, mut label) = match s.mode {
         Mode::Extend => {
             let (w, h) = fit(s.resolution.unwrap_or(tablet), tablet);
-            let _ = display::ensure_modes(&[(w, h)]); // a new mode needs a driver restart; attach says so
             match display::attach(w, h, s.fps.max(60), s.position) {
                 Ok(d) => {
                     let dev = d.device.clone();
@@ -150,9 +204,7 @@ fn stream_once(stream: &mut TcpStream, tablet: (u32, u32), target: &Mutex<Option
     label += &format!(" {w}x{h} · {} fps · {} Mbps · {kind}", s.fps, s.bitrate_mbps);
     set_status(label);
 
-    let mut config = (w as u32).to_be_bytes().to_vec();
-    config.extend_from_slice(&(h as u32).to_be_bytes());
-    write_msg(stream, CONFIG, &config)?;
+    send_json(stream, CONFIG, &json!({ "width": w, "height": h }))?;
 
     // Frame pacing: capture as fast as the desktop updates, send at most `fps`, and never
     // drop the last update of a burst (it's sent once the interval has passed).

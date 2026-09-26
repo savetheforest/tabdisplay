@@ -19,6 +19,7 @@ pub fn cli(arg: &str) -> Option<i32> {
         "--install-driver" => install(),
         "--uninstall-driver" => uninstall(),
         "--restart-driver" => restart(),
+        "--service" => return Some(super::service::run()),
         _ => return None,
     };
     Some(match result {
@@ -63,23 +64,26 @@ fn uninstall() -> io::Result<()> {
 }
 
 /// Disables and re-enables the device: clears Code 43 and makes the driver re-read its settings.
-fn restart() -> io::Result<()> {
-    for state in [DICS_DISABLE, DICS_ENABLE] {
-        for_each_device(|set, dev| unsafe {
-            let params = SP_PROPCHANGE_PARAMS {
-                ClassInstallHeader: SP_CLASSINSTALL_HEADER {
-                    cbSize: size_of::<SP_CLASSINSTALL_HEADER>() as u32,
-                    InstallFunction: DIF_PROPERTYCHANGE,
-                },
-                StateChange: state,
-                Scope: DICS_FLAG_GLOBAL,
-                HwProfile: 0,
-            };
-            SetupDiSetClassInstallParamsW(set, Some(dev), Some(&params.ClassInstallHeader), size_of::<SP_PROPCHANGE_PARAMS>() as u32)?;
-            SetupDiCallClassInstaller(DIF_PROPERTYCHANGE, set, Some(dev))
-        })?;
-    }
-    Ok(())
+pub fn restart() -> io::Result<()> {
+    set_enabled(false)?;
+    set_enabled(true)
+}
+
+/// Enabling the device plugs the virtual monitor in; disabling unplugs it (and stops the driver).
+pub fn set_enabled(on: bool) -> io::Result<()> {
+    for_each_device(|set, dev| unsafe {
+        let params = SP_PROPCHANGE_PARAMS {
+            ClassInstallHeader: SP_CLASSINSTALL_HEADER {
+                cbSize: size_of::<SP_CLASSINSTALL_HEADER>() as u32,
+                InstallFunction: DIF_PROPERTYCHANGE,
+            },
+            StateChange: if on { DICS_ENABLE } else { DICS_DISABLE },
+            Scope: DICS_FLAG_GLOBAL,
+            HwProfile: 0,
+        };
+        SetupDiSetClassInstallParamsW(set, Some(dev), Some(&params.ClassInstallHeader), size_of::<SP_PROPCHANGE_PARAMS>() as u32)?;
+        SetupDiCallClassInstaller(DIF_PROPERTYCHANGE, set, Some(dev))
+    })
 }
 
 /// Creates the root-enumerated device and installs the bundled, signed driver on it
