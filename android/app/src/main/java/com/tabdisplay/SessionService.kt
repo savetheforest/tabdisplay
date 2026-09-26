@@ -19,12 +19,12 @@ class SessionService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val nm = getSystemService(NotificationManager::class.java)
-        nm.createNotificationChannel(NotificationChannel(CHANNEL, "Sessão ativa", NotificationManager.IMPORTANCE_LOW))
+        nm.createNotificationChannel(NotificationChannel(CHANNEL, getString(R.string.session_channel), NotificationManager.IMPORTANCE_LOW))
         val open = PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE)
         val notification = Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("TabDisplay conectado")
-            .setContentText("Conectado a ${intent?.getStringExtra(PC) ?: "PC"}")
+            .setContentTitle(getString(R.string.session_title))
+            .setContentText(getString(R.string.session_text, intent?.getStringExtra(PC) ?: getString(R.string.badge_pc)))
             .setContentIntent(open)
             .setOngoing(true)
             .build()

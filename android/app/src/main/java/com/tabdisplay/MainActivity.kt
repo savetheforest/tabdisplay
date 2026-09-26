@@ -68,6 +68,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -152,7 +153,7 @@ class MainActivity : ComponentActivity() {
             ) {
                 Text("TabDisplay", style = MaterialTheme.typography.displaySmall, fontWeight = FontWeight.SemiBold)
                 Text(
-                    "Use este tablet como segundo monitor do seu PC.",
+                    stringResource(R.string.tagline),
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -163,22 +164,19 @@ class MainActivity : ComponentActivity() {
                     Notice(it, MaterialTheme.colorScheme.secondaryContainer, MaterialTheme.colorScheme.onSecondaryContainer, progress = true)
                 }
 
-                Text("Computadores", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
+                Text(stringResource(R.string.computers), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
                 if (pcs.isEmpty()) {
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 16.dp)) {
                         CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                         Spacer(Modifier.width(16.dp))
-                        Text("Procurando PCs com o TabDisplay aberto…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(stringResource(R.string.searching), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
                 for (pc in pcs) PcCard(pc)
 
-                TextButton(onClick = { manual = true }) { Text("Conectar pelo endereço IP") }
+                TextButton(onClick = { manual = true }) { Text(stringResource(R.string.connect_by_ip)) }
                 Text(
-                    "O PC precisa estar com o TabDisplay aberto e na mesma rede Wi‑Fi. " +
-                        "Pelo cabo, ligue a depuração USB nas opções do desenvolvedor, " +
-                        "ou, sem mexer nelas, compartilhe a internet do tablet pelo USB " +
-                        "e toque no nome do PC assim que ele aparecer.",
+                    stringResource(R.string.connect_hint),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -210,16 +208,16 @@ class MainActivity : ComponentActivity() {
                 leadingContent = {
                     Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.size(40.dp)) {
                         Box(contentAlignment = Alignment.Center) {
-                            Text(if (pc.usb) "USB" else "PC", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                            Text(stringResource(if (pc.usb) R.string.badge_usb else R.string.badge_pc), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
                         }
                     }
                 },
-                headlineContent = { Text(if (pc.usb) "PC pelo cabo USB" else pc.name, fontWeight = FontWeight.Medium) },
-                supportingContent = { Text(if (pc.usb) "Sem pareamento: o cabo basta" else "Wi‑Fi · ${pc.host}") },
+                headlineContent = { Text(if (pc.usb) stringResource(R.string.pc_via_usb) else pc.name, fontWeight = FontWeight.Medium) },
+                supportingContent = { Text(if (pc.usb) stringResource(R.string.usb_no_pairing) else stringResource(R.string.wifi_host, pc.host)) },
                 trailingContent = {
                     if (!pc.usb) {
                         Text(
-                            if (paired) "Pareado" else "Novo",
+                            stringResource(if (paired) R.string.paired else R.string.new_pc),
                             style = MaterialTheme.typography.labelMedium,
                             color = if (paired) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -234,19 +232,19 @@ class MainActivity : ComponentActivity() {
         var host by remember { mutableStateOf(prefs.getString("ip", "") ?: "") }
         AlertDialog(
             onDismissRequest = { done(null) },
-            title = { Text("Conectar pelo IP") },
+            title = { Text(stringResource(R.string.connect_by_ip_title)) },
             text = {
                 OutlinedTextField(
                     value = host,
                     onValueChange = { host = it.trim() },
-                    label = { Text("Endereço IP do PC") },
+                    label = { Text(stringResource(R.string.ip_label)) },
                     placeholder = { Text("192.168.1.18") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                 )
             },
-            confirmButton = { TextButton(onClick = { done(host) }, enabled = host.isNotEmpty()) { Text("Conectar") } },
-            dismissButton = { TextButton(onClick = { done(null) }) { Text("Cancelar") } },
+            confirmButton = { TextButton(onClick = { done(host) }, enabled = host.isNotEmpty()) { Text(stringResource(R.string.connect)) } },
+            dismissButton = { TextButton(onClick = { done(null) }) { Text(stringResource(R.string.cancel)) } },
         )
     }
 
@@ -255,14 +253,14 @@ class MainActivity : ComponentActivity() {
         var code by remember(request) { mutableStateOf("") }
         AlertDialog(
             onDismissRequest = {},
-            title = { Text(if (request.wrong) "Código errado, tente de novo" else "Parear com ${request.pcName}") },
+            title = { Text(if (request.wrong) stringResource(R.string.pair_wrong) else stringResource(R.string.pair_title, request.pcName)) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                    Text("Digite o código de 6 dígitos que apareceu no TabDisplay do PC. Só é pedido na primeira vez.")
+                    Text(stringResource(R.string.pair_body))
                     OutlinedTextField(
                         value = code,
                         onValueChange = { code = it.filter(Char::isDigit).take(6) },
-                        label = { Text("Código") },
+                        label = { Text(stringResource(R.string.code_label)) },
                         singleLine = true,
                         textStyle = MaterialTheme.typography.headlineSmall,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
@@ -270,9 +268,9 @@ class MainActivity : ComponentActivity() {
                 }
             },
             confirmButton = {
-                TextButton(onClick = { pairing = null; stream?.pair(code) }, enabled = code.length == 6) { Text("Parear") }
+                TextButton(onClick = { pairing = null; stream?.pair(code) }, enabled = code.length == 6) { Text(stringResource(R.string.pair)) }
             },
-            dismissButton = { TextButton(onClick = { disconnect() }) { Text("Cancelar") } },
+            dismissButton = { TextButton(onClick = { disconnect() }) { Text(stringResource(R.string.cancel)) } },
         )
     }
 
@@ -299,7 +297,7 @@ class MainActivity : ComponentActivity() {
                 Column(Modifier.align(Alignment.Center), horizontalAlignment = Alignment.CenterHorizontally) {
                     CircularProgressIndicator(color = Color.White)
                     Spacer(Modifier.height(16.dp))
-                    Text("Conectando a ${target.name}…", color = Color.White)
+                    Text(stringResource(R.string.connecting_to, target.name), color = Color.White)
                 }
             }
             if (showStats) {
@@ -327,14 +325,14 @@ class MainActivity : ComponentActivity() {
                 }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                     DropdownMenuItem(
-                        text = { Text(if (showStats) "Esconder estatísticas" else "Mostrar estatísticas") },
+                        text = { Text(stringResource(if (showStats) R.string.hide_stats else R.string.show_stats)) },
                         onClick = {
                             showStats = !showStats
                             prefs.edit().putBoolean("show_stats", showStats).apply()
                             menu = false
                         },
                     )
-                    DropdownMenuItem(text = { Text("Desconectar") }, onClick = { menu = false; disconnect() })
+                    DropdownMenuItem(text = { Text(stringResource(R.string.disconnect)) }, onClick = { menu = false; disconnect() })
                 }
             }
         }
@@ -362,7 +360,7 @@ class MainActivity : ComponentActivity() {
                     .put("screen", JSONArray(listOf(bounds.width(), bounds.height())))
                     .put("decodable", JSONArray(listOf(w, h)))
                     .put("dpi", resources.displayMetrics.densityDpi)
-                stream = Stream(target.host, holder.surface, hello, object : StreamEvents {
+                stream = Stream(applicationContext, target.host, holder.surface, hello, object : StreamEvents {
                     override fun onVideoSize(width: Int, height: Int) = runOnUiThread {
                         attempts = 0 // the session works: next drop retries quickly again
                         video = width to height
@@ -372,7 +370,7 @@ class MainActivity : ComponentActivity() {
                         prefs.edit().putString("token_$pcId", token).putString("pc_at_${target.host}", pcId).apply()
                     }
                     override fun onStats(shownFps: Int, rttMs: Int, mbps: Double) = runOnUiThread {
-                        stats = "$shownFps fps · $rttMs ms · ${"%.1f".format(mbps)} Mbps"
+                        stats = getString(R.string.stats_format, shownFps, rttMs, "%.1f".format(mbps))
                     }
                     override fun onClose(reason: String) = runOnUiThread { endSession(reason) }
                 }).also { it.start() }
@@ -431,7 +429,7 @@ class MainActivity : ComponentActivity() {
         stream = null
         SessionService.stop(this)
         // Say why the list is back when the session died while the screen was locked / the app hidden.
-        val shown = if (reason != null && backgrounded) "A sessão caiu com o app em segundo plano ou a tela bloqueada. $reason" else reason
+        val shown = if (reason != null && backgrounded) getString(R.string.dropped_in_background, reason) else reason
         backgrounded = false
         pairing = null
         video = null
@@ -463,8 +461,8 @@ class MainActivity : ComponentActivity() {
         val last = prefs.getString("last_pc", null) ?: return
         val pc = found.firstOrNull { if (last == "usb") it.usb else it.id == last } ?: return
         val delay = RETRY_DELAYS_MS[attempts.coerceAtMost(RETRY_DELAYS_MS.lastIndex)]
-        val name = if (pc.usb) "PC pelo cabo" else pc.name
-        reconnecting = if (delay > 0) "Reconectando a $name em ${delay / 1000} s…" else "Conectando a $name…"
+        val name = if (pc.usb) getString(R.string.pc_via_cable) else pc.name
+        reconnecting = if (delay > 0) getString(R.string.reconnecting_in, name, delay / 1000) else getString(R.string.connecting_to, name)
         pendingRetry = Runnable {
             pendingRetry = null
             attempts++

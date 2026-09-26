@@ -1,5 +1,6 @@
 package com.tabdisplay
 
+import android.content.Context
 import android.media.MediaCodec
 import android.media.MediaFormat
 import android.os.Handler
@@ -53,6 +54,7 @@ interface StreamEvents {
 
 /** One session with the PC: reads video into a MediaCodec rendering to [surface], sends touches back. */
 class Stream(
+    private val context: Context,
     private val host: String,
     surface: Surface,
     private val hello: JSONObject,
@@ -82,7 +84,7 @@ class Stream(
     fun start() = thread(name = "stream") {
         val reason = try {
             run()
-            "O PC encerrou a conexão."
+            context.getString(R.string.pc_closed)
         } catch (e: Exception) {
             pcReason ?: friendly(e)
         }
@@ -91,9 +93,9 @@ class Stream(
 
     private fun friendly(e: Exception): String = when {
         !connected && (e is SocketTimeoutException || e is ConnectException || e is NoRouteToHostException) ->
-            "O PC não respondeu. O TabDisplay está aberto nele e na mesma rede?"
-        connected && (e is EOFException || e is SocketException) -> "A conexão com o PC caiu."
-        else -> "Erro: ${e.message ?: e.javaClass.simpleName}"
+            context.getString(R.string.pc_no_response)
+        connected && (e is EOFException || e is SocketException) -> context.getString(R.string.connection_dropped)
+        else -> context.getString(R.string.error_generic, e.message ?: e.javaClass.simpleName)
     }
 
     /** Returns true only for the call that actually closed the session. */
@@ -142,7 +144,7 @@ class Stream(
         while (!closed.get()) {
             val type = input.readUnsignedByte()
             val len = input.readInt()
-            require(len in 0..MAX_MSG) { "Mensagem inválida do PC" }
+            require(len in 0..MAX_MSG) { context.getString(R.string.invalid_message) }
             val payload = ByteArray(len)
             input.readFully(payload)
             when (type) {
@@ -150,7 +152,7 @@ class Stream(
                 CONFIG -> json(payload).let { startDecoder(it.getInt("width"), it.getInt("height")) }
                 PAIR_REQUIRED -> json(payload).let { events.onPairRequired(it.optString("pc_name", "PC"), it.optBoolean("wrong")) }
                 PAIRED -> json(payload).let { events.onPaired(it.getString("pc_id"), it.getString("token")) }
-                ERROR -> pcReason = json(payload).optString("message", "O PC recusou a conexão.")
+                ERROR -> pcReason = json(payload).optString("message", context.getString(R.string.pc_refused))
                 PING -> {
                     val ping = json(payload)
                     val shown = rendered.getAndSet(0)
