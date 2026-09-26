@@ -151,6 +151,10 @@ impl VirtualDisplay {
                 }
                 std::thread::sleep(std::time::Duration::from_millis(40));
             }
+            if std::env::var_os("TABDISPLAY_DEBUG").is_some() {
+                let b = CGDisplayBounds(self.id);
+                eprintln!("virtual display {} asked {w}x{h}@{hz}, bounds {}x{} pt", self.id, b.size.width, b.size.height);
+            }
             let main = CGDisplayBounds(CGMainDisplayID());
             let (mw, mh) = (main.size.width as i32, main.size.height as i32);
             let (x, y) = match pos {
