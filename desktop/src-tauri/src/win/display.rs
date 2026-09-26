@@ -33,6 +33,9 @@ pub struct VirtualDisplay {
     /// GDI name like `\\.\DISPLAY5`, matches `DXGI_OUTPUT_DESC::DeviceName`.
     pub device: String,
     lease: Option<Lease>,
+    /// What `configure` last applied: repeating it would make Windows re-set the mode, which drops every other
+    /// session's screen capture (ACCESS_LOST) and starts a rebuild ping-pong between tablets.
+    applied: Option<(u32, u32, u32, Position)>,
 }
 
 impl Drop for VirtualDisplay {
@@ -122,7 +125,7 @@ fn trim(xml: &str) -> String {
 pub fn attach(w: u32, h: u32, hz: u32, pos: Position) -> io::Result<VirtualDisplay> {
     // Without the service (e.g. a dev build) fall back to a driver that's already enabled.
     let lease = if service::available() { Some(service::enable(w, h)?) } else { None };
-    let mut display = VirtualDisplay { device: String::new(), lease };
+    let mut display = VirtualDisplay { device: String::new(), lease, applied: None };
     display.configure(w, h, hz, pos)?;
     Ok(display)
 }
@@ -143,6 +146,9 @@ impl VirtualDisplay {
             }
         };
         // Next to everything else on the desktop (other tablets' monitors included), not just the primary.
+        if self.applied == Some((w, h, hz, pos)) && current_size(&self.device) == Some((w, h)) {
+            return Ok(()); // already in this mode
+        }
         let (l, t, r, b) = desktop_bounds_without(&self.device);
         let (x, y) = match pos {
             Position::Right => (r, 0),
@@ -166,6 +172,7 @@ impl VirtualDisplay {
         if current_size(&self.device) != Some((w, h)) {
             return Err(io::Error::other(format!("{w}x{h} indisponível no monitor virtual")));
         }
+        self.applied = Some((w, h, hz, pos));
         Ok(())
     }
 }
@@ -180,6 +187,7 @@ impl VirtualDisplay {
             return Some(self.device.clone());
         }
         claimed.retain(|d| d != &self.device); // stale name
+        self.applied = None;
         let free = all.into_iter().find(|d| !claimed.contains(d))?;
         claimed.push(free.clone());
         Some(free)
