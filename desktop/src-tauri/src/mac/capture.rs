@@ -2,6 +2,7 @@
 //! Unlike Windows' Desktop Duplication, ScreenCaptureKit draws the mouse cursor into the frames.
 use super::display::{CGDisplayBounds, CGMainDisplayID};
 use screencapturekit::prelude::*;
+use screencapturekit::SCFrameStatus;
 use std::ffi::c_void;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
