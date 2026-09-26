@@ -14,6 +14,10 @@ pub struct Capture {
     /// Last desktop image without the cursor, so the cursor can move without a new desktop frame.
     clean: Vec<u8>,
     cursor: Cursor,
+    /// Native monitor size; `width`/`height` below are what `next` outputs (native, or downscaled to fit the tablet).
+    native: (usize, usize),
+    /// Scratch for the native frame + cursor when downscaling.
+    full: Vec<u8>,
     pub width: usize,
     pub height: usize,
     /// Monitor rect in desktop coordinates: left, top, right, bottom.
@@ -22,9 +26,9 @@ pub struct Capture {
 
 impl Capture {
     /// Duplicates the monitor with GDI name `device` (e.g. `\\.\DISPLAY5`), or the primary one if None.
-    /// ponytail: `_fit` (the size the tablet can decode) is ignored: Desktop Duplication can't scale, so a
-    /// mirrored monitor bigger than the tablet's decoder (e.g. 4K) needs a GPU scaler (VideoProcessor MFT).
-    pub fn open(device: Option<&str>, _fit: impl Fn((u32, u32)) -> (u32, u32)) -> Result<Self> {
+    /// A monitor bigger than `fit` allows (e.g. 4K mirrored to a tablet capped at 2304x1440) is downscaled on the CPU.
+    /// ponytail: CPU bilinear downscale; move to a GPU VideoProcessor if it can't hold the fps on weak CPUs.
+    pub fn open(device: Option<&str>, fit: impl Fn((u32, u32)) -> (u32, u32)) -> Result<Self> {
         unsafe {
             let (adapter, output) = find_output(device)?;
             let (mut device, mut ctx) = (None, None);
@@ -43,6 +47,7 @@ impl Capture {
             let r = output.GetDesc()?.DesktopCoordinates;
             let (width, height) = ((r.right - r.left) as usize, (r.bottom - r.top) as usize);
             let dup = output.DuplicateOutput(&device)?;
+            let (ow, oh) = fit((width as u32, height as u32));
 
             let desc = D3D11_TEXTURE2D_DESC {
                 Width: width as u32,
@@ -64,8 +69,10 @@ impl Capture {
                 staging: staging.unwrap(),
                 clean: Vec::new(),
                 cursor: Cursor::default(),
-                width,
-                height,
+                native: (width, height),
+                full: Vec::new(),
+                width: ow as usize,
+                height: oh as usize,
                 rect: (r.left, r.top, r.right, r.bottom),
             })
         }
@@ -108,20 +115,54 @@ impl Capture {
             if image {
                 let mut map = D3D11_MAPPED_SUBRESOURCE::default();
                 self.ctx.Map(&self.staging, 0, D3D11_MAP_READ, 0, Some(&mut map))?;
-                let row = self.width * 4;
-                self.clean.resize(row * self.height, 0);
-                let src = std::slice::from_raw_parts(map.pData as *const u8, map.RowPitch as usize * self.height);
+                let (nw, nh) = self.native;
+                let row = nw * 4;
+                self.clean.resize(row * nh, 0);
+                let src = std::slice::from_raw_parts(map.pData as *const u8, map.RowPitch as usize * nh);
                 for (y, dst) in self.clean.chunks_exact_mut(row).enumerate() {
                     let s = y * map.RowPitch as usize;
                     dst.copy_from_slice(&src[s..s + row]);
                 }
                 self.ctx.Unmap(&self.staging, 0);
             }
-            buf.clone_from(&self.clean);
+            let (nw, nh) = self.native;
+            let scaled = (self.width, self.height) != (nw, nh);
+            let frame = if scaled { &mut self.full } else { &mut *buf };
+            frame.clone_from(&self.clean);
             if self.cursor.visible {
-                self.cursor.draw(buf, self.width, self.height);
+                self.cursor.draw(frame, nw, nh);
+            }
+            if scaled {
+                buf.resize(self.width * self.height * 4, 0);
+                downscale(&self.full, (nw, nh), buf, (self.width, self.height));
             }
             Ok(true)
+        }
+    }
+}
+
+/// Bilinear resize of tightly packed BGRA `src` to `dst` (both sizes given as (w, h)).
+fn downscale(src: &[u8], (sw, sh): (usize, usize), dst: &mut [u8], (dw, dh): (usize, usize)) {
+    let (kx, ky) = (sw as f32 / dw as f32, sh as f32 / dh as f32);
+    // Per output column: left source pixel index and right-neighbour weight (0..=256).
+    let cols: Vec<(usize, usize, u32)> = (0..dw)
+        .map(|x| {
+            let f = ((x as f32 + 0.5) * kx - 0.5).clamp(0.0, (sw - 1) as f32);
+            let x0 = f as usize;
+            (x0 * 4, (x0 + 1).min(sw - 1) * 4, ((f - x0 as f32) * 256.0) as u32)
+        })
+        .collect();
+    for (y, out) in dst.chunks_exact_mut(dw * 4).enumerate().take(dh) {
+        let f = ((y as f32 + 0.5) * ky - 0.5).clamp(0.0, (sh - 1) as f32);
+        let y0 = f as usize;
+        let wy = ((f - y0 as f32) * 256.0) as u32;
+        let (r0, r1) = (&src[y0 * sw * 4..][..sw * 4], &src[(y0 + 1).min(sh - 1) * sw * 4..][..sw * 4]);
+        for (px, &(a, b, wx)) in out.chunks_exact_mut(4).zip(&cols) {
+            for c in 0..4 {
+                let top = r0[a + c] as u32 * (256 - wx) + r0[b + c] as u32 * wx;
+                let bot = r1[a + c] as u32 * (256 - wx) + r1[b + c] as u32 * wx;
+                px[c] = ((top * (256 - wy) + bot * wy) >> 16) as u8;
+            }
         }
     }
 }
@@ -249,6 +290,19 @@ mod tests {
         c.draw(&mut frame, 2, 2);
         assert_eq!(&frame[12..15], &[0, 0, 255]);
         assert_eq!(&frame[..12], &[100; 12]);
+    }
+
+    #[test]
+    fn downscale_averages_and_keeps_size() {
+        // 4x2 -> 2x1: each output pixel blends its source neighbourhood; a flat image stays flat.
+        let mut dst = vec![0u8; 2 * 4];
+        downscale(&vec![80u8; 4 * 2 * 4], (4, 2), &mut dst, (2, 1));
+        assert_eq!(dst, vec![80u8; 8]);
+        // Black left half / white right half: left output is dark, right is bright.
+        let mut src = vec![0u8; 4 * 2 * 4];
+        for y in 0..2 { for x in 2..4 { src[(y * 4 + x) * 4..][..4].fill(255); } }
+        downscale(&src, (4, 2), &mut dst, (2, 1));
+        assert!(dst[0] < 100 && dst[4] > 150);
     }
 
     #[test]
