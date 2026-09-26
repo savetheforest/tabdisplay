@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:pathData="M31.56,57.3 V39.3 A1.44,1.44 0 0 1 33.0,37.86 H61.8 A1.44,1.44 0 0 1 63.24,39.3 V50.46 M31.56,57.3 A1.44,1.44 0 0 0 33.0,58.74 H51.36"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3.12"
+        android:strokeLineCap="butt" />
+    <path android:pathData="M44.4,60.3 H50.4 A0.6,0.6 0 0 1 51.0,60.9 V65.7 A0.6,0.6 0 0 1 50.4,66.3 H44.4 A0.6,0.6 0 0 1 43.8,65.7 V60.9 A0.6,0.6 0 0 1 44.4,60.3 Z"
+        android:fillColor="#FFFFFF" />
+    <path android:pathData="M40.5,65.4 H49.86 A1.5,1.5 0 0 1 51.36,66.9 V66.9 A1.5,1.5 0 0 1 49.86,68.4 H40.5 A1.5,1.5 0 0 1 39.0,66.9 V66.9 A1.5,1.5 0 0 1 40.5,65.4 Z"
+        android:fillColor="#FFFFFF" />
+    <path android:pathData="M57.0,52.5 H74.4 A3.6,3.6 0 0 1 78.0,56.1 V68.10000000000001 A3.6,3.6 0 0 1 74.4,71.7 H57.0 A3.6,3.6 0 0 1 53.4,68.10000000000001 V56.1 A3.6,3.6 0 0 1 57.0,52.5 Z M57.36,54.54 H74.03999999999999 A1.92,1.92 0 0 1 75.96,56.46 V67.74 A1.92,1.92 0 0 1 74.03999999999999,69.66 H57.36 A1.92,1.92 0 0 1 55.44,67.74 V56.46 A1.92,1.92 0 0 1 57.36,54.54 Z"
+        android:fillColor="#FFFFFF" android:fillType="evenOdd" />
+    <path android:pathData="M58.98,57.0 H70.02 A1.08,1.08 0 0 1 71.1,58.08 V58.08 A1.08,1.08 0 0 1 70.02,59.16 H58.98 A1.08,1.08 0 0 1 57.9,58.08 V58.08 A1.08,1.08 0 0 1 58.98,57.0 Z"
+        android:fillColor="#FFFFFF" />
+    <path android:pathData="M58.98,61.2 H65.82000000000001 A1.08,1.08 0 0 1 66.9,62.28 V62.28 A1.08,1.08 0 0 1 65.82000000000001,63.36 H58.98 A1.08,1.08 0 0 1 57.9,62.28 V62.28 A1.08,1.08 0 0 1 58.98,61.2 Z"
+        android:fillColor="#FFFFFF" />
+    <path android:pathData="M58.98,65.4 H68.22 A1.08,1.08 0 0 1 69.3,66.48 V66.48 A1.08,1.08 0 0 1 68.22,67.56 H58.98 A1.08,1.08 0 0 1 57.9,66.48 V66.48 A1.08,1.08 0 0 1 58.98,65.4 Z"
+        android:fillColor="#FFFFFF" />
+</vector>
