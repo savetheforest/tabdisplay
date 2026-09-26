@@ -39,6 +39,29 @@ cd desktop && CI=true APPLE_SIGNING_IDENTITY="TabDisplay Dev" cargo tauri build 
 A assinatura estável faz o macOS manter as permissões entre builds. Ela é autoassinada: em outros Macs
 o Gatekeeper pede clique direito → Abrir (para distribuir de verdade, use um Developer ID da Apple).
 
+## APK de release assinado
+
+Toda máquina que gera o APK de release precisa da **mesma** keystore, senão o Android recusa atualizar um APK por cima do outro (assinaturas diferentes). A keystore e as senhas nunca entram no repositório.
+
+Uma vez, numa máquina de confiança:
+
+```bash
+keytool -genkeypair -keystore ~/.tabdisplay/android-release.jks -alias tabdisplay -keyalg RSA -keysize 4096 -validity 10000
+```
+
+O Gradle procura a chave em variáveis de ambiente (CI: `TABDISPLAY_KEYSTORE`, `TABDISPLAY_KEYSTORE_PASSWORD`, `TABDISPLAY_KEY_ALIAS`, `TABDISPLAY_KEY_PASSWORD`) ou em `~/.tabdisplay/android-release.properties`:
+
+```properties
+storeFile=C:/Users/voce/.tabdisplay/android-release.jks
+storePassword=…
+keyAlias=tabdisplay
+keyPassword=…
+```
+
+Depois `cd android && ./gradlew assembleRelease`. Confira o certificado com `apksigner verify --print-certs app/build/outputs/apk/release/app-release.apk`: o SHA-256 tem que ser o mesmo em qualquer máquina. Guarde a keystore e as senhas em backup (no GitHub Actions, como secrets): sem elas não há como atualizar o app já instalado nem publicar atualizações na Play Store.
+
+Trocar da chave de debug para esta faz o Android recusar a atualização de instalações antigas (desinstale o app do tablet uma vez).
+
 ## Ícones
 `python scripts/make-icon.py` desenha a logo; `npx tauri icon` gera os tamanhos do desktop e
 `python scripts/make-android-icon.py` gera o ícone adaptativo do Android.
@@ -78,4 +101,4 @@ Comandos do executável, com admin: `tabdisplay.exe --install-driver | --restart
 Limites conhecidos:
 - Nunca recarregue o driver pelo pipe (`RELOAD_DRIVER`/`SETDISPLAYCOUNT`): na versão 25.7 ele crasha (Código 43).
 - Com mais de ~100 modos no XML (resoluções × `g_refresh_rate`) o driver não cria o monitor.
-- O APK é assinado com a chave de debug da máquina que gerou o instalador.
+- O APK do instalador é assinado com a keystore de release (veja “APK de release assinado”); sem ela, cai na chave de debug da máquina.
