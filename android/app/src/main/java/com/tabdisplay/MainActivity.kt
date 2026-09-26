@@ -346,7 +346,7 @@ class MainActivity : ComponentActivity() {
                             menu = false
                         },
                     )
-                    for ((id, label) in listOf("performance" to R.string.profile_performance, "balanced" to R.string.profile_balanced, "quality" to R.string.profile_quality)) {
+                    for ((id, label) in listOf("performance" to R.string.profile_performance, "balanced" to R.string.profile_balanced, "quality" to R.string.profile_quality, "auto" to R.string.profile_auto)) {
                         DropdownMenuItem(
                             text = { Text(stringResource(label)) },
                             trailingIcon = { if (profile == id) Text("✓") },

@@ -49,6 +49,8 @@ pub enum Profile {
     Balanced,
     /// Native resolution, 40 Mbps: sharpest, needs a good link.
     Quality,
+    /// Starts at Balanced and steps between the presets by itself as the network gets worse or better.
+    Auto,
     Custom,
 }
 

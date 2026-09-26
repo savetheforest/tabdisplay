@@ -158,6 +158,8 @@ pub struct Stats {
     pub rtt_ms: u32,
     /// Frames the tablet actually showed per second.
     pub tablet_fps: u32,
+    /// The Auto profile is running below Balanced because the network is struggling.
+    pub reduced: bool,
 }
 
 pub static STATS: Mutex<Option<Stats>> = Mutex::new(None);
@@ -173,6 +175,44 @@ struct Shared {
     rebuild: AtomicBool,
     rtt_ms: AtomicU32,
     tablet_fps: AtomicU32,
+    /// State of the Auto quality profile; outlives rebuilds so a step change sticks.
+    adapt: Mutex<Adapt>,
+}
+
+/// Auto quality: the presets from best (0) to lightest. Steps down when the link struggles for a few seconds,
+/// back up after a long calm stretch.
+const LADDER: [Profile; 3] = [Profile::Quality, Profile::Balanced, Profile::Performance];
+const ADAPT_START: usize = 1;
+
+struct Adapt {
+    level: usize,
+    bad: u32,
+    good: u32,
+    /// Seconds left during which stepping back up is not allowed (after a step down).
+    hold: u32,
+}
+
+impl Adapt {
+    fn new() -> Self {
+        Self { level: ADAPT_START, bad: 0, good: 0, hold: 0 }
+    }
+
+    /// Feeds one second of stats; true if the level changed. `sent_fps` is what the PC sent, `shown_fps` what
+    /// the tablet displayed (a static desktop sends few frames, so only compare them when the PC is busy).
+    fn tick(&mut self, rtt_ms: u32, sent_fps: f32, shown_fps: u32) -> bool {
+        let struggling = rtt_ms > 150 || (sent_fps >= 10.0 && (shown_fps as f32) < sent_fps * 0.6);
+        (self.bad, self.good) = if struggling { (self.bad + 1, 0) } else { (0, self.good + 1) };
+        self.hold = self.hold.saturating_sub(1);
+        if self.bad >= 3 && self.level + 1 < LADDER.len() {
+            (self.level, self.bad, self.hold) = (self.level + 1, 0, 60);
+            return true;
+        }
+        if self.good >= 20 && self.hold == 0 && self.level > 0 {
+            (self.level, self.good) = (self.level - 1, 0);
+            return true;
+        }
+        false
+    }
 }
 
 fn handle(mut stream: TcpStream) -> io::Result<()> {
@@ -199,6 +239,7 @@ fn handle(mut stream: TcpStream) -> io::Result<()> {
         rebuild: AtomicBool::new(false),
         rtt_ms: AtomicU32::new(0),
         tablet_fps: AtomicU32::new(0),
+        adapt: Mutex::new(Adapt::new()),
     });
     let (mut rd, reader) = (stream.try_clone()?, shared.clone());
     thread::spawn(move || {
@@ -275,8 +316,9 @@ fn preset(payload: &[u8]) -> Option<Profile> {
 }
 
 /// Size, fps and Mbps for the chosen quality profile.
-fn plan(s: &Settings, tablet: (u32, u32)) -> ((u32, u32), u32, u32) {
+fn plan(s: &Settings, tablet: (u32, u32), auto_level: usize) -> ((u32, u32), u32, u32) {
     match s.profile {
+        Profile::Auto => plan(&Settings { profile: LADDER[auto_level], ..s.clone() }, tablet, auto_level),
         Profile::Performance => ((tablet.0 / 2 & !15, tablet.1 / 2 & !15), 60, 10),
         Profile::Balanced => (tablet, 60, 20),
         Profile::Quality => (tablet, 60, 40),
@@ -319,7 +361,8 @@ fn stream_once(stream: &mut TcpStream, shared: &Shared, virtual_display: &mut Op
     let version = settings::VERSION.load(Ordering::Relaxed);
     let s = settings::get();
     let tablet = *shared.tablet.lock().unwrap();
-    let ((w, h), fps, mbps) = plan(&s, tablet);
+    let level = shared.adapt.lock().unwrap().level;
+    let ((w, h), fps, mbps) = plan(&s, tablet, level);
 
     let mut label = match s.mode {
         Mode::Extend => {
@@ -387,7 +430,11 @@ fn stream_once(stream: &mut TcpStream, shared: &Shared, virtual_display: &mut Op
                 encoder_kind: kind,
                 rtt_ms: shared.rtt_ms.load(Ordering::Relaxed),
                 tablet_fps: shared.tablet_fps.load(Ordering::Relaxed),
+                reduced: s.profile == Profile::Auto && level > ADAPT_START,
             };
+            if s.profile == Profile::Auto && shared.adapt.lock().unwrap().tick(stats.rtt_ms, stats.fps, stats.tablet_fps) {
+                shared.rebuild.store(true, Ordering::Relaxed);
+            }
             // The tablet echoes `t` (round trip) and may show the rest in its stats overlay.
             let ping = json!({ "t": shared.start.elapsed().as_millis() as u64, "rtt_ms": stats.rtt_ms, "fps": stats.fps.round(), "mbps": stats.mbps });
             *STATS.lock().unwrap() = Some(stats);
@@ -483,14 +530,34 @@ mod tests {
     fn quality_profiles() {
         let tablet = (2304, 1440);
         let mut s = Settings::default();
-        assert_eq!(plan(&s, tablet), ((2304, 1440), 60, 20)); // Balanced is the default
+        assert_eq!(plan(&s, tablet, 1), ((2304, 1440), 60, 20)); // Balanced is the default
         s.profile = Profile::Performance;
-        assert_eq!(plan(&s, tablet), ((1152, 720), 60, 10));
+        assert_eq!(plan(&s, tablet, 1), ((1152, 720), 60, 10));
         s.profile = Profile::Quality;
-        assert_eq!(plan(&s, tablet).2, 40);
+        assert_eq!(plan(&s, tablet, 1).2, 40);
         s = Settings { profile: Profile::Custom, resolution: Some((2560, 1600)), fps: 90, bitrate_mbps: 30, ..s };
-        assert_eq!(plan(&s, tablet), ((2304, 1440), 90, 30)); // custom still fits the decoder
-        assert_eq!(plan(&s, (1440, 2304)).0, (2304, 1440)); // a portrait tablet decodes the landscape size too
+        assert_eq!(plan(&s, tablet, 1), ((2304, 1440), 90, 30)); // custom still fits the decoder
+        assert_eq!(plan(&s, (1440, 2304), 1).0, (2304, 1440)); // a portrait tablet decodes the landscape size too
+    }
+
+    #[test]
+    fn auto_steps_down_on_bad_link_and_back_up_when_calm() {
+        let mut a = Adapt::new();
+        assert!(!a.tick(200, 0.0, 0) && !a.tick(200, 0.0, 0)); // two bad seconds: not yet
+        assert!(a.tick(200, 0.0, 0) && a.level == 2); // third: Balanced -> Performance
+        assert!(!a.tick(200, 0.0, 0) && a.level == 2); // already at the lightest
+        for _ in 0..50 {
+            a.tick(20, 30.0, 30); // calm, but still held
+        }
+        assert_eq!(a.level, 2);
+        let mut up = false;
+        for _ in 0..40 {
+            up |= a.tick(20, 30.0, 30);
+        }
+        assert!(up && a.level < 2);
+        // The tablet showing far fewer frames than were sent counts as struggling too.
+        let mut b = Adapt::new();
+        assert!(!b.tick(10, 60.0, 20) && !b.tick(10, 60.0, 20) && b.tick(10, 60.0, 20));
     }
 
     #[test]
