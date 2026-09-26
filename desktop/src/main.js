@@ -188,6 +188,36 @@ $("autostart").onchange = async (e) => {
   $("autostart-state").textContent = on ? "Ligado" : "Desligado";
 };
 
+// ---- updates ----
+async function checkUpdate(silent) {
+  if (!silent) $("update-desc").textContent = "Procurando…";
+  try {
+    const update = await invoke("check_update");
+    $("update-banner").hidden = !update;
+    if (update) {
+      $("update-version").textContent = update.version;
+      $("update-notes").textContent = update.notes ?? "";
+      $("update-desc").textContent = `A versão ${update.version} está disponível (veja o aviso em Início).`;
+    } else if (!silent) {
+      $("update-desc").textContent = "Você já está na versão mais recente.";
+    }
+  } catch (e) {
+    if (!silent) $("update-desc").textContent = `Não consegui verificar: ${e}`;
+  }
+}
+$("update-check").onclick = () => checkUpdate(false);
+$("update-install").onclick = async () => {
+  $("update-install").disabled = true;
+  $("update-install").textContent = "Baixando…";
+  try {
+    await invoke("install_update"); // the app restarts when it's done
+  } catch (e) {
+    $("update-install").disabled = false;
+    $("update-install").textContent = "Instalar e reiniciar";
+    $("update-desc").textContent = `A atualização falhou: ${e}`;
+  }
+};
+
 // ---- licence ----
 function renderLicense() {
   $("license-desc").textContent = license.valid ? `Ativa para ${license.name} (${license.email}). Estender liberado.` : "Sem licença: só Espelhar. Estender pede uma licença.";
@@ -283,6 +313,7 @@ async function load() {
   refresh();
   setInterval(refresh, 1000);
   if (!settings.onboarded) showGuide();
+  setTimeout(() => checkUpdate(true), 8000); // quietly, a few seconds after opening
 }
 
 load();
