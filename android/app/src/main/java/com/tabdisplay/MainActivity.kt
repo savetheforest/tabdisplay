@@ -136,7 +136,9 @@ class MainActivity : ComponentActivity() {
         LaunchedEffect(Unit) { window.insetsController?.show(WindowInsets.Type.systemBars()) }
         var manual by remember { mutableStateOf(false) }
 
-        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).safeDrawingPadding(), contentAlignment = Alignment.TopCenter) {
+        // Surface (not a plain background) so text gets the theme's onSurface color.
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
+        Box(Modifier.fillMaxSize().safeDrawingPadding(), contentAlignment = Alignment.TopCenter) {
             Column(
                 Modifier.widthIn(max = 640.dp).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 32.dp, vertical = 40.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -172,6 +174,7 @@ class MainActivity : ComponentActivity() {
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+        }
         }
         if (manual) ManualDialog { host -> manual = false; host?.let { connectManually(it) } }
     }
