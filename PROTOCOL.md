@@ -19,6 +19,7 @@ Mensagens de controle levam JSON (UTF‑8); VIDEO e INPUT são binárias (big-en
 | 11   | PONG          | tablet → PC | o mesmo `{"t"}` de volta: o PC mede a latência de ida e volta |
 | 12   | STATS         | tablet → PC | `{"fps"}`: quadros exibidos desde o último PING |
 | 13   | SCROLL        | tablet → PC | roda do mouse / rolagem do trackpad, binário (abaixo) |
+| 14   | PROFILE       | ambos       | `{"profile":"performance"\|"balanced"\|"quality"\|"custom"}`: o PC informa o perfil de qualidade ativo (logo depois de cada CONFIG); o tablet manda o mesmo para trocá-lo ("custom" só o PC define) e o PC refaz o vídeo, como se fosse trocado na tela do PC |
 
 - `decodable`: o maior tamanho, na proporção da tela, que o decoder H.264 do tablet aguenta (Redmi Pad 2: 2304×1440).
   O PC nunca manda vídeo maior que isso.

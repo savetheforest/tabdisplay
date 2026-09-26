@@ -40,6 +40,7 @@ private const val PING = 10
 private const val PONG = 11
 private const val STATS = 12
 private const val SCROLL = 13
+private const val PROFILE = 14
 private const val MAX_MSG = 16 shl 20
 
 /** What a session reports back to the UI. Called from the stream thread. */
@@ -51,6 +52,8 @@ interface StreamEvents {
     fun onClose(reason: String)
     /** Once a second: frames this tablet showed, round trip and data rate (as measured by the PC). */
     fun onStats(shownFps: Int, rttMs: Int, mbps: Double) {}
+    /** The quality preset the PC uses now: "performance", "balanced", "quality" or "custom". */
+    fun onProfile(profile: String) {}
 }
 
 /** One session with the PC: reads video into a MediaCodec rendering to [surface], sends touches back. */
@@ -132,6 +135,9 @@ class Stream(
     /** One SCROLL frame (mouse wheel / trackpad), already encoded (see [Input.scroll]). */
     fun scroll(frame: ByteArray) = send(SCROLL) { write(frame) }
 
+    /** Asks the PC to switch to a quality preset ("performance", "balanced" or "quality"). */
+    fun setProfile(profile: String) = sendJson(PROFILE, JSONObject().put("profile", profile))
+
     /** The tablet rotated: ask for video (and a virtual monitor) of the new decodable size. */
     fun resize(width: Int, height: Int) = sendJson(RESIZE, JSONObject().put("decodable", org.json.JSONArray(listOf(width, height))))
 
@@ -156,6 +162,7 @@ class Stream(
                 CONFIG -> json(payload).let { startDecoder(it.getInt("width"), it.getInt("height")) }
                 PAIR_REQUIRED -> json(payload).let { events.onPairRequired(it.optString("pc_name", "PC"), it.optBoolean("wrong")) }
                 PAIRED -> json(payload).let { events.onPaired(it.getString("pc_id"), it.getString("token")) }
+                PROFILE -> json(payload).let { events.onProfile(it.optString("profile")) }
                 ERROR -> pcReason = json(payload).optString("message", context.getString(R.string.pc_refused))
                 PING -> {
                     val ping = json(payload)

@@ -30,6 +30,7 @@ pub const PING: u8 = 10;
 pub const PONG: u8 = 11;
 pub const STATS_MSG: u8 = 12;
 pub const SCROLL: u8 = 13;
+pub const PROFILE: u8 = 14;
 const MAX_MSG: usize = 16 << 20;
 
 pub static STATUS: Mutex<String> = Mutex::new(String::new());
@@ -210,6 +211,16 @@ fn handle(mut stream: TcpStream) -> io::Result<()> {
                         injector.inject(&frame, rect, as_mouse);
                     }
                 }
+                PROFILE => {
+                    // The tablet picked a quality preset: same effect as the PC UI (rebuilds the session).
+                    if let Some(profile) = preset(&p) {
+                        let mut s = settings::get();
+                        if s.profile != profile {
+                            s.profile = profile;
+                            settings::set(s);
+                        }
+                    }
+                }
                 SCROLL => {
                     let target = *reader.target.lock().unwrap();
                     if let (Some((rect, _)), Some(s)) = (target, crate::input::parse_scroll(&p)) {
@@ -252,6 +263,15 @@ fn handle(mut stream: TcpStream) -> io::Result<()> {
     drop(virtual_display);
     let _ = stream.shutdown(Shutdown::Both);
     result
+}
+
+/// The preset in a PROFILE message from the tablet; Custom is only settable from the PC.
+fn preset(payload: &[u8]) -> Option<Profile> {
+    let v: Value = serde_json::from_slice(payload).ok()?;
+    match serde_json::from_value(v["profile"].clone()).ok()? {
+        Profile::Custom => None,
+        p => Some(p),
+    }
 }
 
 /// Size, fps and Mbps for the chosen quality profile.
@@ -334,6 +354,8 @@ fn stream_once(stream: &mut TcpStream, shared: &Shared, virtual_display: &mut Op
     set_status(label);
 
     send_json(stream, CONFIG, &json!({ "width": cw, "height": ch }))?;
+    // Tell the tablet which preset is active (a rebuild after either side changed it lands here).
+    send_json(stream, PROFILE, &json!({ "profile": s.profile }))?;
 
     // Frame pacing: capture as fast as the desktop updates, send at most `fps`, and never
     // drop the last update of a burst (it's sent once the interval has passed).
@@ -469,6 +491,14 @@ mod tests {
         s = Settings { profile: Profile::Custom, resolution: Some((2560, 1600)), fps: 90, bitrate_mbps: 30, ..s };
         assert_eq!(plan(&s, tablet), ((2304, 1440), 90, 30)); // custom still fits the decoder
         assert_eq!(plan(&s, (1440, 2304)).0, (2304, 1440)); // a portrait tablet decodes the landscape size too
+    }
+
+    #[test]
+    fn tablet_can_pick_presets_but_not_custom() {
+        assert!(preset(br#"{"profile":"quality"}"#) == Some(Profile::Quality));
+        assert!(preset(br#"{"profile":"custom"}"#).is_none());
+        assert!(preset(br#"{"profile":"nope"}"#).is_none());
+        assert!(preset(b"x").is_none());
     }
 
     #[test]

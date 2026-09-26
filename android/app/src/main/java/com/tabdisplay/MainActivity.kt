@@ -105,6 +105,8 @@ class MainActivity : ComponentActivity() {
     private var video by mutableStateOf<Pair<Int, Int>?>(null)
     private var stats by mutableStateOf<String?>(null)
     private var showStats by mutableStateOf(false)
+    /** The PC's active quality preset, as last reported. */
+    private var profile by mutableStateOf<String?>(null)
 
     private var stream: Stream? = null
     private var discovery: Discovery? = null
@@ -344,6 +346,16 @@ class MainActivity : ComponentActivity() {
                             menu = false
                         },
                     )
+                    for ((id, label) in listOf("performance" to R.string.profile_performance, "balanced" to R.string.profile_balanced, "quality" to R.string.profile_quality)) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(label)) },
+                            trailingIcon = { if (profile == id) Text("✓") },
+                            onClick = { menu = false; profile = id; stream?.setProfile(id) },
+                        )
+                    }
+                    if (profile == "custom") {
+                        DropdownMenuItem(text = { Text(stringResource(R.string.profile_custom)) }, trailingIcon = { Text("✓") }, enabled = false, onClick = {})
+                    }
                     DropdownMenuItem(text = { Text(stringResource(R.string.disconnect)) }, onClick = { menu = false; disconnect() })
                 }
             }
@@ -381,6 +393,7 @@ class MainActivity : ComponentActivity() {
                     override fun onPaired(pcId: String, token: String) {
                         prefs.edit().putString("token_$pcId", token).putString("pc_at_${target.host}", pcId).apply()
                     }
+                    override fun onProfile(profile: String) = runOnUiThread { this@MainActivity.profile = profile }
                     override fun onStats(shownFps: Int, rttMs: Int, mbps: Double) = runOnUiThread {
                         stats = getString(R.string.stats_format, shownFps, rttMs, "%.1f".format(mbps))
                     }
@@ -449,6 +462,7 @@ class MainActivity : ComponentActivity() {
         pairing = null
         video = null
         stats = null
+        profile = null
         screen = Screen.Connect(shown)
     }
 
