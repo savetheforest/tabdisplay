@@ -1,7 +1,9 @@
 //! Tablet input -> macOS. macOS has no touch-injection API, so touch becomes mouse gestures:
 //! tap = click (double tap = double click), press and hold = right click, drag = drag,
 //! two fingers = scroll. The pen drives the mouse with pressure. Needs the Accessibility permission.
-//! ponytail: no pinch zoom; add magnify events if people miss it.
+//! Pinch (two fingers moving apart/together) sends Cmd+= / Cmd+-, the zoom shortcut of Safari, Photos, Maps, Preview...
+//! ponytail: macOS has no public API for synthetic magnify gestures; use the private gesture CGEvent if apps that only
+//! react to real pinches (no zoom shortcut) matter.
 use super::display::CGPoint;
 use crate::input::{Action, Contact, Kind, Scroll};
 use std::ffi::c_void;
@@ -13,6 +15,8 @@ pub type Rect = (i32, i32, i32, i32);
 unsafe extern "C" {
     fn CGEventCreateMouseEvent(source: *const c_void, kind: u32, position: CGPoint, button: u32) -> *mut c_void;
     fn CGEventCreateScrollWheelEvent2(source: *const c_void, units: u32, count: u32, wheel1: i32, wheel2: i32, wheel3: i32) -> *mut c_void;
+    fn CGEventCreateKeyboardEvent(source: *const c_void, keycode: u16, down: bool) -> *mut c_void;
+    fn CGEventSetFlags(event: *mut c_void, flags: u64);
     fn CGEventSetIntegerValueField(event: *mut c_void, field: u32, value: i64);
     fn CGEventSetDoubleValueField(event: *mut c_void, field: u32, value: f64);
     fn CGEventPost(tap: u32, event: *mut c_void);
@@ -35,6 +39,12 @@ const RIGHT_DRAGGED: u32 = 7;
 const CLICK_STATE: u32 = 1;
 const PRESSURE: u32 = 2;
 
+const KEY_EQUALS: u16 = 24; // Cmd+= zooms in
+const KEY_MINUS: u16 = 27;
+const FLAG_COMMAND: u64 = 0x10_0000;
+/// Points the fingers must spread or pinch (in total) for one zoom step.
+const ZOOM_STEP: f64 = 60.0;
+
 const HOLD_FOR_RIGHT_CLICK: Duration = Duration::from_millis(500);
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 /// Points a finger may wander before a touch counts as a drag instead of a tap.
@@ -51,6 +61,9 @@ pub struct Injector {
     touch: Option<Touch>,
     /// Centroid of a two-finger scroll in progress.
     scroll: Option<CGPoint>,
+    /// Distance between the first two fingers, and how much of it is still owed to a zoom step.
+    spread: Option<f64>,
+    zoom: f64,
     /// Where and when the last tap was, and how many in a row (for double clicks).
     last_tap: Option<(Instant, CGPoint, i64)>,
     pen_button: Option<(u32, u32)>,
@@ -81,6 +94,20 @@ fn post(kind: u32, at: CGPoint, button: u32, clicks: i64, pressure: Option<f64>)
     }
 }
 
+/// Presses Cmd + `key`.
+fn command_key(key: u16) {
+    unsafe {
+        for down in [true, false] {
+            let e = CGEventCreateKeyboardEvent(std::ptr::null(), key, down);
+            if !e.is_null() {
+                CGEventSetFlags(e, FLAG_COMMAND);
+                CGEventPost(0, e);
+                CFRelease(e);
+            }
+        }
+    }
+}
+
 fn scroll(dy: f64, dx: f64) {
     unsafe {
         let e = CGEventCreateScrollWheelEvent2(std::ptr::null(), 0, 2, dy.round() as i32, dx.round() as i32, 0); // pixel units
@@ -104,11 +131,22 @@ impl Injector {
         let down: Vec<&&Contact> = touches.iter().filter(|c| c.action != Action::Up).collect();
 
         if down.len() >= 2 {
-            // Two fingers: scroll by how far their midpoint moved (natural direction, like a trackpad).
+            // Two fingers: scroll by how far their midpoint moved (natural direction, like a trackpad), or,
+            // when the fingers moved apart/together more than the midpoint moved, zoom.
             let n = down.len() as f64;
             let mid = down.iter().map(|c| point(c, rect)).fold(CGPoint::default(), |a, p| CGPoint { x: a.x + p.x / n, y: a.y + p.y / n });
-            if let Some(prev) = self.scroll {
-                scroll(mid.y - prev.y, mid.x - prev.x);
+            let spread = distance(point(down[0], rect), point(down[1], rect));
+            if let (Some(prev), Some(prev_spread)) = (self.scroll, self.spread.replace(spread)) {
+                let change = spread - prev_spread;
+                if change.abs() > distance(mid, prev) {
+                    self.zoom += change;
+                    while self.zoom.abs() >= ZOOM_STEP {
+                        command_key(if self.zoom > 0.0 { KEY_EQUALS } else { KEY_MINUS });
+                        self.zoom -= ZOOM_STEP.copysign(self.zoom);
+                    }
+                } else {
+                    scroll(mid.y - prev.y, mid.x - prev.x);
+                }
             }
             self.scroll = Some(mid);
             if let Some(t) = self.touch.take().filter(|t| t.dragging) {
@@ -119,7 +157,7 @@ impl Injector {
         if self.scroll.is_some() {
             // The rest of a two-finger gesture: ignore until every finger is up.
             if down.is_empty() {
-                self.scroll = None;
+                (self.scroll, self.spread, self.zoom) = (None, None, 0.0);
             }
             return;
         }
