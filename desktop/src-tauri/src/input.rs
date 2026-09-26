@@ -36,6 +36,26 @@ pub struct Contact {
 
 const CONTACT_LEN: usize = 18;
 
+/// SCROLL message (tablet -> PC): a mouse wheel / trackpad scroll at a point.
+/// Payload: `[x f32][y f32][dx f32][dy f32]` (big-endian); x/y are 0..1 over the video, dx/dy are wheel
+/// notches with Android's sign (dy > 0 scrolls up, dx > 0 scrolls right).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct Scroll {
+    pub x: f32,
+    pub y: f32,
+    pub dx: f32,
+    pub dy: f32,
+}
+
+/// None if the payload is malformed.
+pub fn parse_scroll(p: &[u8]) -> Option<Scroll> {
+    if p.len() != 16 {
+        return None;
+    }
+    let v: [f32; 4] = std::array::from_fn(|i| f32::from_be_bytes(p[i * 4..i * 4 + 4].try_into().unwrap()));
+    Some(Scroll { x: v[0], y: v[1], dx: v[2], dy: v[3] })
+}
+
 /// None if the payload is malformed.
 pub fn parse(p: &[u8]) -> Option<Vec<Contact>> {
     let (&count, rest) = p.split_first()?;
@@ -75,6 +95,16 @@ pub fn parse(p: &[u8]) -> Option<Vec<Contact>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_scroll() {
+        let mut p = Vec::new();
+        for v in [0.5f32, 0.25, -1.0, 3.0] {
+            p.extend(v.to_be_bytes());
+        }
+        assert_eq!(parse_scroll(&p), Some(Scroll { x: 0.5, y: 0.25, dx: -1.0, dy: 3.0 }));
+        assert!(parse_scroll(&p[..15]).is_none());
+    }
 
     #[test]
     fn parses_two_finger_frame_and_pen() {

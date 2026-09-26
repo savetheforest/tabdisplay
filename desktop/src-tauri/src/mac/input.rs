@@ -3,7 +3,7 @@
 //! two fingers = scroll. The pen drives the mouse with pressure. Needs the Accessibility permission.
 //! ponytail: no pinch zoom; add magnify events if people miss it.
 use super::display::CGPoint;
-use crate::input::{Action, Contact, Kind};
+use crate::input::{Action, Contact, Kind, Scroll};
 use std::ffi::c_void;
 use std::time::{Duration, Instant};
 
@@ -164,6 +164,15 @@ impl Injector {
     }
 
     /// The pen is a mouse with pressure; its side button makes it a right button.
+    /// Moves the cursor to the point and scrolls there (a mouse wheel notch is about 40 px).
+    pub fn scroll(&mut self, s: &Scroll, rect: Rect) {
+        let (l, t, r, b) = rect;
+        let at = CGPoint { x: l as f64 + s.x.clamp(0.0, 1.0) as f64 * (r - l) as f64, y: t as f64 + s.y.clamp(0.0, 1.0) as f64 * (b - t) as f64 };
+        post(MOVED, at, 0, 0, None);
+        // Android: dy > 0 scrolls up, dx > 0 scrolls right; CG wheel2 > 0 moves content right.
+        scroll(s.dy as f64 * 40.0, -(s.dx as f64) * 40.0);
+    }
+
     fn pen(&mut self, c: &Contact, rect: Rect) {
         let at = point(c, rect);
         let pressure = Some(c.pressure.clamp(0.0, 1.0) as f64);

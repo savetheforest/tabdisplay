@@ -18,6 +18,7 @@ Mensagens de controle levam JSON (UTF‑8); VIDEO e INPUT são binárias (big-en
 | 10   | PING          | PC → tablet | `{"t"}` (ms desde o início da sessão), uma vez por segundo |
 | 11   | PONG          | tablet → PC | o mesmo `{"t"}` de volta: o PC mede a latência de ida e volta |
 | 12   | STATS         | tablet → PC | `{"fps"}`: quadros exibidos desde o último PING |
+| 13   | SCROLL        | tablet → PC | roda do mouse / rolagem do trackpad, binário (abaixo) |
 
 - `decodable`: o maior tamanho, na proporção da tela, que o decoder H.264 do tablet aguenta (Redmi Pad 2: 2304×1440).
   O PC nunca manda vídeo maior que isso.
@@ -30,6 +31,10 @@ Um quadro por `MotionEvent` do Android, com todos os contatos daquele instante:
 `[id u8][kind u8: 0 toque, 1 caneta][action u8: 0 down, 1 move, 2 up, 3 hover, 4 saiu][botões u8: 1 botão da caneta, 2 borracha][x f32][y f32][pressão f32][tilt_x i8][tilt_y i8]`.
 x/y vão de 0 a 1 sobre o vídeo; pressão de 0 a 1; inclinação em graus.
 O PC reproduz o quadro como toque/caneta nativos do Windows (os gestos vêm do próprio Windows), ou, no modo mouse, só o primeiro dedo move o mouse.
+
+## SCROLL
+`[x f32][y f32][dx f32][dy f32]` (big-endian): x/y de 0 a 1 sobre o vídeo (o PC move o cursor até lá antes de rolar) e dx/dy em "cliques" da roda, com o sinal do Android
+(`AXIS_HSCROLL`/`AXIS_VSCROLL`): dy > 0 rola para cima, dx > 0 rola para a direita. No Windows vira `MOUSEEVENTF_WHEEL`/`HWHEEL` (120 por clique); no Mac, um evento de scroll de ~40 px por clique.
 
 ## Pareamento
 Um tablet sem token válido precisa digitar o código que aparece no PC (vale 2 minutos, 5 tentativas) —
