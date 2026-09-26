@@ -41,6 +41,7 @@ private const val PONG = 11
 private const val STATS = 12
 private const val SCROLL = 13
 private const val PROFILE = 14
+private const val AUDIO = 15
 private const val MAX_MSG = 16 shl 20
 
 /** What a session reports back to the UI. Called from the stream thread. */
@@ -81,6 +82,13 @@ class Stream(
     @Volatile private var videoSize: Pair<Int, Int>? = null
     /** Frames shown since the last PING (the PC pings once a second, so this is fps). */
     private val rendered = java.util.concurrent.atomic.AtomicInteger()
+    private var audio: Audio? = null
+    /** Local mute of the PC's audio; the PC's own volume is not touched. */
+    @Volatile var muted = false
+        set(value) {
+            field = value
+            audio?.muted = value
+        }
     @Volatile private var connected = false
     /** Set when the PC explains why it ends the session (ERROR message). */
     @Volatile private var pcReason: String? = null
@@ -108,6 +116,8 @@ class Stream(
         runCatching { socket.close() }
         sender.shutdownNow()
         synchronized(lock) { releaseCodec() }
+        audio?.release()
+        audio = null
         decoderThread.quitSafely()
         return true
     }
@@ -162,6 +172,7 @@ class Stream(
                 CONFIG -> json(payload).let { startDecoder(it.getInt("width"), it.getInt("height")) }
                 PAIR_REQUIRED -> json(payload).let { events.onPairRequired(it.optString("pc_name", "PC"), it.optBoolean("wrong")) }
                 PAIRED -> json(payload).let { events.onPaired(it.getString("pc_id"), it.getString("token")) }
+                AUDIO -> playAudio(payload)
                 PROFILE -> json(payload).let { events.onProfile(it.optString("profile")) }
                 ERROR -> pcReason = json(payload).optString("message", context.getString(R.string.pc_refused))
                 PING -> {
@@ -173,6 +184,11 @@ class Stream(
                 }
             }
         }
+    }
+
+    private fun playAudio(packet: ByteArray) {
+        if (audio == null) audio = runCatching { Audio() }.getOrNull()?.also { it.muted = muted } ?: return
+        runCatching { audio!!.play(packet) }
     }
 
     private fun json(payload: ByteArray) = JSONObject(String(payload, Charsets.UTF_8))

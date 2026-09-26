@@ -69,3 +69,22 @@ impl Loopback {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Needs an output device and something playing: `cargo test loopback -- --ignored` while music plays.
+    #[test]
+    #[ignore]
+    fn loopback_captures_what_plays() {
+        let mut lb = Loopback::open().expect("default output device");
+        let mut pcm = Vec::new();
+        for _ in 0..200 {
+            lb.read(&mut pcm).unwrap();
+        }
+        let peak = pcm.iter().fold(0f32, |m, v| m.max(v.abs()));
+        eprintln!("{} samples, peak {peak}", pcm.len());
+        assert!(!pcm.is_empty());
+    }
+}
