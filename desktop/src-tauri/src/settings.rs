@@ -110,7 +110,9 @@ pub fn init(dir: PathBuf) {
     if let (Some(s), true) = (&mut loaded, known_user) {
         s.onboarded = true;
     }
-    *CURRENT.lock().unwrap() = Some(loaded.unwrap_or_default());
+    let mut settings = loaded.unwrap_or_default();
+    require_licence_for_extend(&mut settings);
+    *CURRENT.lock().unwrap() = Some(settings);
     let _ = PATH.set(path);
 }
 
@@ -118,11 +120,31 @@ pub fn get() -> Settings {
     CURRENT.lock().unwrap().clone().unwrap_or_default()
 }
 
-pub fn set(s: Settings) {
+/// Extending the desktop needs a licence; without one the mode stays Mirror.
+fn require_licence_for_extend(s: &mut Settings) {
+    if s.mode == Mode::Extend && !crate::license::valid() {
+        s.mode = Mode::Mirror;
+    }
+}
+
+pub fn set(mut s: Settings) {
+    require_licence_for_extend(&mut s);
     if let Some(path) = PATH.get() {
         let _ = std::fs::create_dir_all(path.parent().unwrap());
         let _ = std::fs::write(path, serde_json::to_string_pretty(&s).unwrap());
     }
     *CURRENT.lock().unwrap() = Some(s);
     VERSION.fetch_add(1, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extend_needs_a_licence() {
+        // No licence is loaded in tests: asking for Extend leaves the mode at Mirror.
+        set(Settings { mode: Mode::Extend, ..Default::default() });
+        assert!(get().mode == Mode::Mirror);
+    }
 }

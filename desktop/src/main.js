@@ -17,6 +17,7 @@ const DRIVER = {
 };
 
 let settings;
+let license = { valid: false };
 let dismissedCode = null;
 
 // ---- navigation ----
@@ -60,6 +61,10 @@ function render() {
 }
 
 async function save(patch) {
+  if (patch.mode === "extend" && !license.valid) {
+    $("license-dialog").showModal(); // Estender needs a licence
+    return;
+  }
   settings = { ...settings, ...patch };
   render();
   await invoke("set_settings", { settings });
@@ -183,6 +188,32 @@ $("autostart").onchange = async (e) => {
   $("autostart-state").textContent = on ? "Ligado" : "Desligado";
 };
 
+// ---- licence ----
+function renderLicense() {
+  $("license-desc").textContent = license.valid ? `Ativa para ${license.name} (${license.email}). Estender liberado.` : "Sem licença: só Espelhar. Estender pede uma licença.";
+  $("license-activate").textContent = license.valid ? "Remover" : "Ativar";
+  $("license-token").hidden = license.valid;
+  for (const b of $$('.seg[data-setting="mode"] button[data-value="extend"]')) b.title = license.valid ? "" : "Requer licença";
+}
+$("license-activate").onclick = async () => {
+  if (license.valid) {
+    license = await invoke("remove_license");
+    settings = await invoke("get_settings");
+    render();
+  } else {
+    try {
+      license = await invoke("activate_license", { token: $("license-token").value });
+      $("license-token").value = "";
+    } catch (e) {
+      $("license-desc").textContent = String(e);
+      return;
+    }
+  }
+  renderLicense();
+};
+$("license-buy").onclick = () => invoke("open_buy_page");
+$("license-close").onclick = () => $("license-dialog").close();
+
 // ---- first-run guide ----
 const GUIDE_TABLET = `<p>Instale o app no tablet de um destes jeitos:</p><ol>
   <li><b>USB com depuração:</b> ligue a depuração USB nas opções do desenvolvedor, conecte o cabo e use “Instalar app no tablet” na página Início.</li>
@@ -236,6 +267,8 @@ async function load() {
   $("autostart").checked = info.autostart;
   $("autostart-state").textContent = info.autostart ? "Ligado" : "Desligado";
 
+  license = await invoke("license_status");
+  renderLicense();
   settings = await invoke("get_settings");
   const [monitors, presets] = await invoke("options");
   $("resolution").replaceChildren(
