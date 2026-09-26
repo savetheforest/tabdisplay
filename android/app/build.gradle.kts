@@ -18,6 +18,10 @@ android {
             // ponytail: signed with this machine's debug key so the installer can sideload it;
             // a real keystore is needed for the Play Store or installs across machines.
             signingConfig = signingConfigs.getByName("debug")
+            // Compose pulls in whole libraries; R8 trims the APK from ~20 MB to a few MB.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
         }
     }
     buildFeatures {
