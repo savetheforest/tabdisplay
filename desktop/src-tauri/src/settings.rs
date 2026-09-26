@@ -29,10 +29,34 @@ pub enum Encoder {
     Cpu,
 }
 
+/// How finger touches reach the PC. The pen is always a pen.
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TouchMode {
+    /// Real Windows touch: scroll, pinch and press-and-hold come from Windows itself.
+    Native,
+    /// First finger drives the mouse, for apps that ignore touch.
+    Mouse,
+}
+
+/// Quality presets; Custom uses `resolution`, `fps` and `bitrate_mbps`.
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Profile {
+    /// Half the tablet's resolution, 10 Mbps: smooth on weak Wi-Fi.
+    Performance,
+    /// Native resolution, 20 Mbps.
+    Balanced,
+    /// Native resolution, 40 Mbps: sharpest, needs a good link.
+    Quality,
+    Custom,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub mode: Mode,
+    pub profile: Profile,
     /// Extend: virtual monitor size; None = tablet's native resolution.
     pub resolution: Option<(u32, u32)>,
     pub position: Position,
@@ -42,12 +66,14 @@ pub struct Settings {
     pub bitrate_mbps: u32,
     pub encoder: Encoder,
     pub touch: bool,
+    pub touch_mode: TouchMode,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
             mode: Mode::Extend,
+            profile: Profile::Balanced,
             resolution: None,
             position: Position::Right,
             mirror_monitor: None,
@@ -55,6 +81,7 @@ impl Default for Settings {
             bitrate_mbps: 20,
             encoder: Encoder::Auto,
             touch: true,
+            touch_mode: TouchMode::Native,
         }
     }
 }

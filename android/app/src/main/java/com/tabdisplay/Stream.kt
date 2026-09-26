@@ -26,12 +26,16 @@ import kotlin.concurrent.thread
 private const val PORT = 7070
 private const val HELLO = 1
 private const val VIDEO = 2
-private const val TOUCH = 3
+private const val INPUT = 3
 private const val CONFIG = 4
 private const val PAIR_REQUIRED = 5
 private const val PAIR = 6
 private const val PAIRED = 7
 private const val ERROR = 8
+private const val RESIZE = 9
+private const val PING = 10
+private const val PONG = 11
+private const val STATS = 12
 private const val MAX_MSG = 16 shl 20
 
 /** What a session reports back to the UI. Called from the stream thread. */
@@ -56,6 +60,8 @@ class Stream(
     private val freeInputs = LinkedBlockingQueue<Int>()
     private lateinit var out: DataOutputStream
     @Volatile private var codec: MediaCodec? = null
+    /** Frames shown since the last PING (the PC pings once a second, so this is fps). */
+    private val rendered = java.util.concurrent.atomic.AtomicInteger()
     @Volatile private var connected = false
     /** Set when the PC explains why it ends the session (ERROR message). */
     @Volatile private var pcReason: String? = null
@@ -87,12 +93,11 @@ class Stream(
         return true
     }
 
-    /** action: 0 down, 1 move, 2 up; x/y normalized to 0..1. */
-    fun touch(action: Int, x: Float, y: Float) = send(TOUCH) {
-        writeByte(action)
-        writeFloat(x)
-        writeFloat(y)
-    }
+    /** One INPUT frame: every touch/pen contact of a MotionEvent, already encoded (see [Input]). */
+    fun input(frame: ByteArray) = send(INPUT) { write(frame) }
+
+    /** The tablet rotated: ask for video (and a virtual monitor) of the new decodable size. */
+    fun resize(width: Int, height: Int) = sendJson(RESIZE, JSONObject().put("decodable", org.json.JSONArray(listOf(width, height))))
 
     fun pair(code: String) = sendJson(PAIR, JSONObject().put("code", code))
 
@@ -116,6 +121,10 @@ class Stream(
                 PAIR_REQUIRED -> json(payload).let { events.onPairRequired(it.optString("pc_name", "PC"), it.optBoolean("wrong")) }
                 PAIRED -> json(payload).let { events.onPaired(it.getString("pc_id"), it.getString("token")) }
                 ERROR -> pcReason = json(payload).optString("message", "O PC recusou a conexão.")
+                PING -> {
+                    sendJson(PONG, json(payload)) // echo: the PC measures the round trip
+                    sendJson(STATS, JSONObject().put("fps", rendered.getAndSet(0)))
+                }
             }
         }
     }
@@ -155,6 +164,7 @@ class Stream(
 
                 override fun onOutputBufferAvailable(c: MediaCodec, index: Int, info: MediaCodec.BufferInfo) {
                     runCatching { c.releaseOutputBuffer(index, true) } // render immediately, no pacing
+                    rendered.incrementAndGet()
                 }
 
                 override fun onError(c: MediaCodec, e: MediaCodec.CodecException) {

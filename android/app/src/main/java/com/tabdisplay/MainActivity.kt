@@ -8,11 +8,12 @@ import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.text.InputFilter
 import android.text.InputType
 import android.view.Gravity
-import android.view.MotionEvent
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.WindowInsets
@@ -31,6 +32,11 @@ class MainActivity : Activity() {
     private var stream: Stream? = null
     private var discovery: Discovery? = null
     private val prefs by lazy { getPreferences(MODE_PRIVATE) }
+    private val handler = Handler(Looper.getMainLooper())
+    /** Reconnect to the last PC when it shows up; off after the user disconnects on purpose. */
+    private var autoConnect = true
+    private var attempts = 0
+    private var pendingRetry: Runnable? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -74,11 +80,29 @@ class MainActivity : Activity() {
                 for (pc in found) {
                     pcs.addView(Button(this).apply {
                         text = if (pc.usb) "USB (cabo)" else "${pc.name}  ·  Wi‑Fi ${pc.host}"
-                        setOnClickListener { showDisplay(pc.host, pc.id) }
+                        setOnClickListener {
+                            autoConnect = true
+                            showDisplay(pc.host, pc.id)
+                        }
                     }, width)
                 }
+                maybeReconnect(found, info)
             }
         }.also { it.start() }
+    }
+
+    /** Reconnects to the last PC once discovery sees it again, waiting longer after each failure. */
+    private fun maybeReconnect(found: List<Discovery.Pc>, info: TextView) {
+        if (!autoConnect || pendingRetry != null) return
+        val last = prefs.getString("last_pc", null) ?: return
+        val pc = found.firstOrNull { if (last == "usb") it.usb else it.id == last } ?: return
+        val delay = RETRY_DELAYS_MS[attempts.coerceAtMost(RETRY_DELAYS_MS.lastIndex)]
+        if (delay > 0) info.text = "${info.text}\nReconectando a ${pc.name} em ${delay / 1000} s…"
+        pendingRetry = Runnable {
+            pendingRetry = null
+            attempts++
+            showDisplay(pc.host, pc.id)
+        }.also { handler.postDelayed(it, delay) }
     }
 
     override fun onDestroy() {
@@ -91,6 +115,9 @@ class MainActivity : Activity() {
     private fun showDisplay(host: String, pcId: String?) {
         discovery?.stop()
         discovery = null
+        pendingRetry?.let(handler::removeCallbacks)
+        pendingRetry = null
+        prefs.edit().putString("last_pc", pcId ?: if (host == "127.0.0.1") "usb" else null).apply()
         val view = SurfaceView(this)
         val container = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
@@ -99,6 +126,7 @@ class MainActivity : Activity() {
         setContentView(container)
         // Letterbox: keep the PC's aspect ratio in any tablet orientation.
         var video = 0 to 0
+        var sentSize = 0 to 0
         fun fit() {
             val (w, h) = video
             if (w == 0 || container.width == 0) return
@@ -115,6 +143,7 @@ class MainActivity : Activity() {
             override fun surfaceCreated(holder: SurfaceHolder) {
                 val bounds = windowManager.currentWindowMetrics.bounds
                 val (w, h) = decodableSize(bounds.width(), bounds.height())
+                sentSize = w to h
                 val hello = JSONObject()
                     .put("v", 2)
                     .put("device_id", deviceId)
@@ -124,7 +153,11 @@ class MainActivity : Activity() {
                     .put("decodable", JSONArray(listOf(w, h)))
                     .put("dpi", resources.displayMetrics.densityDpi)
                 stream = Stream(host, holder.surface, hello, object : StreamEvents {
-                    override fun onVideoSize(width: Int, height: Int) = runOnUiThread { video = width to height; fit() }
+                    override fun onVideoSize(width: Int, height: Int) = runOnUiThread {
+                        attempts = 0 // the session works: next drop retries quickly again
+                        video = width to height
+                        fit()
+                    }
                     override fun onPairRequired(pcName: String, wrong: Boolean) = runOnUiThread { askCode(pcName, wrong) }
                     override fun onPaired(pcId: String, token: String) {
                         prefs.edit().putString("token_$pcId", token).putString("pc_at_$host", pcId).apply()
@@ -136,22 +169,28 @@ class MainActivity : Activity() {
                 }).also { it.start() }
             }
 
-            override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) = Unit
+            // Rotation: the window's shape changed, so ask the PC for a monitor of the new shape.
+            override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+                val bounds = windowManager.currentWindowMetrics.bounds
+                val size = decodableSize(bounds.width(), bounds.height())
+                if (size != sentSize) {
+                    sentSize = size
+                    stream?.resize(size.first, size.second)
+                }
+            }
 
             override fun surfaceDestroyed(holder: SurfaceHolder) {
                 stream?.close()
                 stream = null
             }
         })
+        // Every finger and the pen (including hovering) go to the PC as one INPUT frame per event.
         view.setOnTouchListener { v, e ->
-            val action = when (e.actionMasked) {
-                MotionEvent.ACTION_DOWN -> 0
-                MotionEvent.ACTION_MOVE -> 1
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> 2
-                else -> return@setOnTouchListener true
-            }
-            stream?.touch(action, e.x / v.width, e.y / v.height)
+            Input.encode(e, v.width, v.height)?.let { stream?.input(it) }
             true
+        }
+        view.setOnGenericMotionListener { v, e ->
+            Input.encode(e, v.width, v.height)?.let { stream?.input(it) } != null
         }
     }
 
@@ -176,7 +215,12 @@ class MainActivity : Activity() {
             .setView(field)
             .setCancelable(false)
             .setPositiveButton("Parear") { _, _ -> stream?.pair(field.text.toString()) }
-            .setNegativeButton("Cancelar") { _, _ -> stream?.close(); stream = null; showConnect(null) }
+            .setNegativeButton("Cancelar") { _, _ ->
+                autoConnect = false
+                stream?.close()
+                stream = null
+                showConnect(null)
+            }
             .show()
         field.requestFocus()
     }
@@ -196,5 +240,9 @@ class MainActivity : Activity() {
             if (caps.any { it.areSizeAndRateSupported(w, h, 60.0) }) return w to h
         }
         return 1280 to 720
+    }
+
+    private companion object {
+        val RETRY_DELAYS_MS = listOf(0L, 1000L, 2000L, 5000L, 10000L)
     }
 }

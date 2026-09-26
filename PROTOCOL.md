@@ -2,23 +2,34 @@
 
 Uma conexão TCP na porta **7070**. O PC é o servidor e o tablet é o cliente.
 Cada mensagem tem o formato `[type:u8][len:u32 BE][payload:len bytes]`.
-Mensagens de controle levam JSON (UTF‑8); VIDEO e TOUCH são binárias (big-endian).
+Mensagens de controle levam JSON (UTF‑8); VIDEO e INPUT são binárias (big-endian).
 
 | type | nome          | direção     | payload |
 |------|---------------|-------------|---------|
 | 1    | HELLO         | tablet → PC | `{"v":2, "device_id", "device_name", "token", "screen":[w,h], "decodable":[w,h], "dpi"}` (primeira mensagem) |
 | 2    | VIDEO         | PC → tablet | uma access unit H.264 Annex‑B (SPS/PPS antes de cada IDR) |
-| 3    | TOUCH         | tablet → PC | `action:u8 (0 down, 1 move, 2 up), x:f32, y:f32` (0..1 relativo ao vídeo) |
+| 3    | INPUT         | tablet → PC | um quadro de toque/caneta (binário, abaixo) |
 | 4    | CONFIG        | PC → tablet | `{"width","height"}` do vídeo; (re)cria o decoder. Chega de novo quando as configurações mudam |
 | 5    | PAIR_REQUIRED | PC → tablet | `{"pc_id", "pc_name", "wrong"}`: o PC mostra um código de 6 dígitos; `wrong` = o último não bateu |
 | 6    | PAIR          | tablet → PC | `{"code"}` |
 | 7    | PAIRED        | PC → tablet | `{"pc_id", "token"}`: o tablet guarda o token por `pc_id` e o manda nos próximos HELLO |
 | 8    | ERROR         | PC → tablet | `{"message"}` para mostrar ao usuário; o PC fecha a conexão em seguida |
+| 9    | RESIZE        | tablet → PC | `{"decodable":[w,h]}` quando o tablet gira; o PC refaz o monitor no novo formato |
+| 10   | PING          | PC → tablet | `{"t"}` (ms desde o início da sessão), uma vez por segundo |
+| 11   | PONG          | tablet → PC | o mesmo `{"t"}` de volta: o PC mede a latência de ida e volta |
+| 12   | STATS         | tablet → PC | `{"fps"}`: quadros exibidos desde o último PING |
 
 - `decodable`: o maior tamanho, na proporção da tela, que o decoder H.264 do tablet aguenta (Redmi Pad 2: 2304×1440).
   O PC nunca manda vídeo maior que isso.
-- Sequência: HELLO → (PAIR_REQUIRED ⇄ PAIR → PAIRED, só na primeira vez pelo Wi‑Fi) → CONFIG → VIDEO... ⇄ TOUCH.
+- Sequência: HELLO → (PAIR_REQUIRED ⇄ PAIR → PAIRED, só na primeira vez pelo Wi‑Fi) → CONFIG → VIDEO... ⇄ INPUT (+ PING/PONG/STATS a cada segundo, RESIZE ao girar).
 - Versão diferente de 2 → ERROR pedindo para atualizar. Mensagens acima de 16 MiB derrubam a conexão.
+
+## INPUT
+Um quadro por `MotionEvent` do Android, com todos os contatos daquele instante:
+`[count u8]` e, para cada contato, 18 bytes:
+`[id u8][kind u8: 0 toque, 1 caneta][action u8: 0 down, 1 move, 2 up, 3 hover, 4 saiu][botões u8: 1 botão da caneta, 2 borracha][x f32][y f32][pressão f32][tilt_x i8][tilt_y i8]`.
+x/y vão de 0 a 1 sobre o vídeo; pressão de 0 a 1; inclinação em graus.
+O PC reproduz o quadro como toque/caneta nativos do Windows (os gestos vêm do próprio Windows), ou, no modo mouse, só o primeiro dedo move o mouse.
 
 ## Pareamento
 Pelo Wi‑Fi, um tablet sem token válido precisa digitar o código que aparece no PC (vale 2 minutos, 5 tentativas).

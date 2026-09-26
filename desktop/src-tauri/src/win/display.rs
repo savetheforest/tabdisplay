@@ -27,7 +27,7 @@ const MAX_REFRESH: u32 = 120;
 pub struct VirtualDisplay {
     /// GDI name like `\\.\DISPLAY5`, matches `DXGI_OUTPUT_DESC::DeviceName`.
     pub device: String,
-    _lease: Option<Lease>,
+    lease: Option<Lease>,
 }
 
 impl Drop for VirtualDisplay {
@@ -108,39 +108,51 @@ fn trim(xml: &str) -> String {
 pub fn attach(w: u32, h: u32, hz: u32, pos: Position) -> io::Result<VirtualDisplay> {
     // Without the service (e.g. a dev build) fall back to a driver that's already enabled.
     let lease = if service::available() { Some(service::enable(w, h)?) } else { None };
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let device = loop {
-        match find_device() {
-            Some(d) => break d,
-            None if Instant::now() < deadline && lease.is_some() => sleep(Duration::from_millis(200)),
-            None => return Err(io::Error::other("monitor virtual indisponível (serviço do TabDisplay parado?)")),
-        }
-    };
-    let (pw, ph) = unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) };
-    let (x, y) = match pos {
-        Position::Right => (pw, 0),
-        Position::Left => (-(w as i32), 0),
-        Position::Above => (0, -(h as i32)),
-        Position::Below => (0, ph),
-    };
-    let mut mode = DEVMODEW {
-        dmSize: size_of::<DEVMODEW>() as u16,
-        dmPelsWidth: w,
-        dmPelsHeight: h,
-        dmDisplayFrequency: hz,
-        dmFields: DM_POSITION | DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY,
-        ..Default::default()
-    };
-    mode.Anonymous1.Anonymous2.dmPosition = POINTL { x, y };
-    if apply(&device, mode) != DISP_CHANGE_SUCCESSFUL && hz != 60 {
-        mode.dmDisplayFrequency = 60; // refresh rate not offered: fall back
-        apply(&device, mode);
-    }
-    let display = VirtualDisplay { device, _lease: lease };
-    if current_size(&display.device) != Some((w, h)) {
-        return Err(io::Error::other(format!("{w}x{h} indisponível no monitor virtual")));
-    }
+    let mut display = VirtualDisplay { device: String::new(), lease };
+    display.configure(w, h, hz, pos)?;
     Ok(display)
+}
+
+impl VirtualDisplay {
+    /// Changes size/refresh/position in place: the monitor stays plugged in (windows on it stay put),
+    /// unless the size is new to the driver, which then restarts.
+    pub fn configure(&mut self, w: u32, h: u32, hz: u32, pos: Position) -> io::Result<()> {
+        if let Some(lease) = &mut self.lease {
+            lease.ensure_mode(w, h)?;
+        }
+        let deadline = Instant::now() + Duration::from_secs(10);
+        self.device = loop {
+            match find_device() {
+                Some(d) => break d,
+                None if Instant::now() < deadline && self.lease.is_some() => sleep(Duration::from_millis(200)),
+                None => return Err(io::Error::other("monitor virtual indisponível (serviço do TabDisplay parado?)")),
+            }
+        };
+        let (pw, ph) = unsafe { (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) };
+        let (x, y) = match pos {
+            Position::Right => (pw, 0),
+            Position::Left => (-(w as i32), 0),
+            Position::Above => (0, -(h as i32)),
+            Position::Below => (0, ph),
+        };
+        let mut mode = DEVMODEW {
+            dmSize: size_of::<DEVMODEW>() as u16,
+            dmPelsWidth: w,
+            dmPelsHeight: h,
+            dmDisplayFrequency: hz,
+            dmFields: DM_POSITION | DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY,
+            ..Default::default()
+        };
+        mode.Anonymous1.Anonymous2.dmPosition = POINTL { x, y };
+        if apply(&self.device, mode) != DISP_CHANGE_SUCCESSFUL && hz != 60 {
+            mode.dmDisplayFrequency = 60; // refresh rate not offered: fall back
+            apply(&self.device, mode);
+        }
+        if current_size(&self.device) != Some((w, h)) {
+            return Err(io::Error::other(format!("{w}x{h} indisponível no monitor virtual")));
+        }
+        Ok(())
+    }
 }
 
 /// GDI name of the virtual monitor (attached or not), if it is plugged in.

@@ -27,7 +27,24 @@ const SDDL: &str = "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;AU)";
 // ---- app side -------------------------------------------------------------------------------------------
 
 /// A session's hold on the virtual monitor. The monitor exists while any lease is open.
-pub struct Lease(#[allow(dead_code)] File);
+pub struct Lease {
+    pipe: File,
+    /// Sizes the driver is known to offer (each request covers both orientations).
+    known: Vec<(u32, u32)>,
+}
+
+impl Lease {
+    /// Makes sure the driver offers `w`x`h`. A new size restarts the driver, so the monitor briefly
+    /// unplugs and comes back under a new GDI name. Rotating to a known size costs nothing.
+    pub fn ensure_mode(&mut self, w: u32, h: u32) -> io::Result<()> {
+        if self.known.iter().any(|&k| k == (w, h) || k == (h, w)) {
+            return Ok(());
+        }
+        call(&self.pipe, &format!("MODE {w} {h}"))?;
+        self.known.push((w, h));
+        Ok(())
+    }
+}
 
 /// Whether the service is running (checks its pipe without connecting).
 pub fn available() -> bool {
@@ -38,7 +55,7 @@ pub fn available() -> bool {
 /// Plugs in the virtual monitor, making sure the driver offers `w`x`h`.
 pub fn enable(w: u32, h: u32) -> io::Result<Lease> {
     let pipe = request(&format!("ENABLE {w} {h}"))?;
-    Ok(Lease(pipe))
+    Ok(Lease { pipe, known: vec![(w, h)] })
 }
 
 /// Restarts the driver (e.g. after it crashed). No UAC: the service does it.
@@ -47,12 +64,18 @@ pub fn restart() -> io::Result<()> {
 }
 
 fn request(cmd: &str) -> io::Result<File> {
-    let mut pipe = OpenOptions::new().read(true).write(true).open(PIPE)?;
+    let pipe = OpenOptions::new().read(true).write(true).open(PIPE)?;
+    call(&pipe, cmd)?;
+    Ok(pipe)
+}
+
+/// One command, one reply line ("OK" or "ERR <why>").
+fn call(mut pipe: &File, cmd: &str) -> io::Result<()> {
     writeln!(pipe, "{cmd}")?;
     let mut reply = String::new();
-    BufReader::new(&pipe).read_line(&mut reply)?;
+    BufReader::new(pipe).read_line(&mut reply)?;
     match reply.trim_end() {
-        "OK" => Ok(pipe),
+        "OK" => Ok(()),
         err => Err(io::Error::other(err.trim_start_matches("ERR ").to_string())),
     }
 }
@@ -167,9 +190,18 @@ fn client(pipe: File) {
 
 fn handle(line: &str, holds_lease: &mut bool) -> io::Result<()> {
     let mut words = line.split_whitespace();
-    match words.next() {
+    let command = words.next();
+    let mut n = || words.next().and_then(|v| v.parse::<u32>().ok()).ok_or_else(|| io::Error::other("esperava: <comando> w h"));
+    match command {
+        Some("MODE") if *holds_lease => {
+            let (w, h) = (n()?, n()?);
+            let _leases = LEASES.lock().unwrap();
+            if display::ensure_modes(&[(w, h)])? {
+                driver::restart()?;
+            }
+            Ok(())
+        }
         Some("ENABLE") if !*holds_lease => {
-            let mut n = || words.next().and_then(|v| v.parse().ok()).ok_or_else(|| io::Error::other("ENABLE w h"));
             let (w, h) = (n()?, n()?);
             let mut leases = LEASES.lock().unwrap();
             let new_mode = display::ensure_modes(&[(w, h)])?;

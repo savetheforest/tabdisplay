@@ -1,4 +1,5 @@
 mod encode;
+mod input;
 mod pairing;
 mod server;
 mod settings;
@@ -41,6 +42,7 @@ fn status() -> serde_json::Value {
         "driver": display::driver_state(),
         "usb": *USB.lock().unwrap(),
         "pairing": pairing,
+        "stats": server::STATS.lock().unwrap().clone(),
     })
 }
 

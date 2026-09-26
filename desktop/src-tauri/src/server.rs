@@ -1,13 +1,13 @@
 //! TCP server + wire protocol. See PROTOCOL.md.
 use crate::encode::H264;
 use crate::pairing::{self, Check};
-use crate::settings::{self, Encoder, Mode, Settings};
-use crate::win::{capture::Capture, display, encode::MfEncoder, input};
-use serde::Deserialize;
+use crate::settings::{self, Encoder, Mode, Profile, Settings, TouchMode};
+use crate::win::{capture::Capture, display, encode::MfEncoder, input::Injector};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -16,15 +16,19 @@ pub const PORT: u16 = 7070;
 pub const BEACON_PORT: u16 = 7071;
 const PROTOCOL: u32 = 2;
 
-// Message types. Control messages carry JSON; VIDEO and TOUCH are binary. See PROTOCOL.md.
+// Message types. Control messages carry JSON; VIDEO and INPUT are binary. See PROTOCOL.md.
 pub const HELLO: u8 = 1;
 pub const VIDEO: u8 = 2;
-pub const TOUCH: u8 = 3;
+pub const INPUT: u8 = 3;
 pub const CONFIG: u8 = 4;
 pub const PAIR_REQUIRED: u8 = 5;
 pub const PAIR: u8 = 6;
 pub const PAIRED: u8 = 7;
 pub const ERROR: u8 = 8;
+pub const RESIZE: u8 = 9;
+pub const PING: u8 = 10;
+pub const PONG: u8 = 11;
+pub const STATS_MSG: u8 = 12;
 const MAX_MSG: usize = 16 << 20;
 
 pub static STATUS: Mutex<String> = Mutex::new(String::new());
@@ -65,9 +69,6 @@ fn refuse(w: &mut impl Write, message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::PermissionDenied, message.to_string())
 }
 
-fn be_f32(p: &[u8], i: usize) -> f32 {
-    f32::from_be_bytes(p[i..i + 4].try_into().unwrap())
-}
 
 pub fn computer_name() -> String {
     std::env::var("COMPUTERNAME").or_else(|_| std::env::var("HOSTNAME")).unwrap_or_else(|_| "PC".into())
@@ -114,7 +115,39 @@ struct Hello {
     decodable: (u32, u32),
 }
 
-type Rect = (i32, i32, i32, i32);
+use crate::win::input::Rect;
+/// Where tablet input goes and whether touch acts as a mouse; None = input off.
+type Target = Option<(Rect, bool)>;
+
+/// Live numbers for the UI (None when no tablet is connected).
+#[derive(Clone, Default, Serialize)]
+pub struct Stats {
+    pub width: usize,
+    pub height: usize,
+    /// Frames sent per second.
+    pub fps: f32,
+    pub mbps: f32,
+    pub encode_ms: f32,
+    /// Round trip PC -> tablet -> PC.
+    pub rtt_ms: u32,
+    /// Frames the tablet actually showed per second.
+    pub tablet_fps: u32,
+}
+
+pub static STATS: Mutex<Option<Stats>> = Mutex::new(None);
+
+/// What a session's reader thread (tablet -> PC) shares with its streaming loop.
+struct Shared {
+    start: Instant,
+    alive: AtomicBool,
+    target: Mutex<Target>,
+    /// The tablet's decodable size; changes when it rotates (RESIZE).
+    tablet: Mutex<(u32, u32)>,
+    /// Set by RESIZE: rebuild the pipeline for the new size.
+    rebuild: AtomicBool,
+    rtt_ms: AtomicU32,
+    tablet_fps: AtomicU32,
+}
 
 fn handle(mut stream: TcpStream) -> io::Result<()> {
     stream.set_nodelay(true)?;
@@ -129,28 +162,72 @@ fn handle(mut stream: TcpStream) -> io::Result<()> {
         pair(&mut stream, &hello).inspect_err(|_| pairing::cancel())?;
     }
     set_status(format!("Conectado: {} ({})", hello.device_name, if usb { "USB" } else { "Wi‑Fi" }));
-    let tablet = hello.decodable;
 
-    // Tablet -> PC: touches go to whatever rect is being streamed (None = touch off).
-    // `alive` turns false when the tablet disconnects.
-    let target: Arc<Mutex<Option<Rect>>> = Arc::new(Mutex::new(None));
-    let alive = Arc::new(AtomicBool::new(true));
-    let (mut rd, reader_target, reader_alive) = (stream.try_clone()?, target.clone(), alive.clone());
+    let shared = Arc::new(Shared {
+        start: Instant::now(),
+        alive: AtomicBool::new(true),
+        target: Mutex::new(None),
+        tablet: Mutex::new(hello.decodable),
+        rebuild: AtomicBool::new(false),
+        rtt_ms: AtomicU32::new(0),
+        tablet_fps: AtomicU32::new(0),
+    });
+    let (mut rd, reader) = (stream.try_clone()?, shared.clone());
     thread::spawn(move || {
+        let mut injector = Injector::default();
         while let Ok((kind, p)) = read_msg(&mut rd) {
-            if let (TOUCH, 9, Some(rect)) = (kind, p.len(), *reader_target.lock().unwrap()) {
-                input::touch(p[0], be_f32(&p, 1), be_f32(&p, 5), rect);
+            match kind {
+                INPUT => {
+                    let target = *reader.target.lock().unwrap();
+                    if let (Some((rect, as_mouse)), Some(frame)) = (target, crate::input::parse(&p)) {
+                        injector.inject(&frame, rect, as_mouse);
+                    }
+                }
+                RESIZE => {
+                    if let Ok(v) = serde_json::from_slice::<Value>(&p) {
+                        if let (Some(w), Some(h)) = (v["decodable"][0].as_u64(), v["decodable"][1].as_u64()) {
+                            *reader.tablet.lock().unwrap() = (w as u32, h as u32);
+                            reader.rebuild.store(true, Ordering::Relaxed);
+                        }
+                    }
+                }
+                PONG => {
+                    if let Some(t) = serde_json::from_slice::<Value>(&p).ok().and_then(|v| v["t"].as_u64()) {
+                        let rtt = (reader.start.elapsed().as_millis() as u64).saturating_sub(t);
+                        reader.rtt_ms.store(rtt as u32, Ordering::Relaxed);
+                    }
+                }
+                STATS_MSG => {
+                    if let Some(fps) = serde_json::from_slice::<Value>(&p).ok().and_then(|v| v["fps"].as_u64()) {
+                        reader.tablet_fps.store(fps as u32, Ordering::Relaxed);
+                    }
+                }
+                _ => {}
             }
         }
-        reader_alive.store(false, Ordering::Relaxed);
+        reader.alive.store(false, Ordering::Relaxed);
     });
 
+    // The virtual monitor lives for the whole session; rebuilds only change its mode.
+    let mut virtual_display = None;
     let mut result = Ok(());
-    while alive.load(Ordering::Relaxed) && result.is_ok() {
-        result = stream_once(&mut stream, tablet, &target, &alive);
+    while shared.alive.load(Ordering::Relaxed) && result.is_ok() {
+        result = stream_once(&mut stream, &shared, &mut virtual_display);
     }
+    *STATS.lock().unwrap() = None;
+    drop(virtual_display);
     let _ = stream.shutdown(Shutdown::Both);
     result
+}
+
+/// Size, fps and Mbps for the chosen quality profile.
+fn plan(s: &Settings, tablet: (u32, u32)) -> ((u32, u32), u32, u32) {
+    match s.profile {
+        Profile::Performance => ((tablet.0 / 2 & !15, tablet.1 / 2 & !15), 60, 10),
+        Profile::Balanced => (tablet, 60, 20),
+        Profile::Quality => (tablet, 60, 40),
+        Profile::Custom => (fit(s.resolution.unwrap_or(tablet), tablet), s.fps, s.bitrate_mbps),
+    }
 }
 
 /// Shows a code on the PC and waits for the tablet to send it back. Ok = paired (token sent).
@@ -178,37 +255,51 @@ fn pair(stream: &mut TcpStream, hello: &Hello) -> io::Result<()> {
     }
 }
 
-/// Streams with the current settings until they change, capture is lost, or the tablet leaves.
-fn stream_once(stream: &mut TcpStream, tablet: (u32, u32), target: &Mutex<Option<Rect>>, alive: &AtomicBool) -> io::Result<()> {
+/// Streams with the current settings until they change, the tablet rotates, capture is lost, or the
+/// tablet leaves.
+fn stream_once(stream: &mut TcpStream, shared: &Shared, virtual_display: &mut Option<display::VirtualDisplay>) -> io::Result<()> {
     let version = settings::VERSION.load(Ordering::Relaxed);
     let s = settings::get();
+    let tablet = *shared.tablet.lock().unwrap();
+    let ((w, h), fps, mbps) = plan(&s, tablet);
 
-    // Dropping `_virtual` at the end of this function detaches the virtual monitor.
-    let (_virtual, device, mut label) = match s.mode {
+    let mut label = match s.mode {
         Mode::Extend => {
-            let (w, h) = fit(s.resolution.unwrap_or(tablet), tablet);
-            match display::attach(w, h, s.fps.max(60), s.position) {
-                Ok(d) => {
-                    let dev = d.device.clone();
-                    (Some(d), Some(dev), "Estendendo".to_string())
+            let hz = fps.max(60);
+            let configured = match virtual_display {
+                Some(d) => d.configure(w, h, hz, s.position),
+                None => display::attach(w, h, hz, s.position).map(|d| *virtual_display = Some(d)),
+            };
+            match configured {
+                Ok(()) => "Estendendo".to_string(),
+                Err(e) => {
+                    *virtual_display = None;
+                    format!("Espelhando (estender falhou: {e})")
                 }
-                Err(e) => (None, None, format!("Espelhando (estender falhou: {e})")),
             }
         }
-        Mode::Mirror => (None, s.mirror_monitor.clone(), "Espelhando".to_string()),
+        Mode::Mirror => {
+            *virtual_display = None;
+            "Espelhando".to_string()
+        }
+    };
+    let device = match virtual_display {
+        Some(d) => Some(d.device.clone()),
+        None if s.mode == Mode::Mirror => s.mirror_monitor.clone(),
+        None => None,
     };
     let mut cap = open_capture(device.as_deref())?;
-    *target.lock().unwrap() = s.touch.then_some(cap.rect);
-    let (w, h) = (cap.width, cap.height);
-    let (mut encode, kind) = encoder(w, h, &s)?;
-    label += &format!(" {w}x{h} · {} fps · {} Mbps · {kind}", s.fps, s.bitrate_mbps);
+    *shared.target.lock().unwrap() = s.touch.then_some((cap.rect, s.touch_mode == TouchMode::Mouse));
+    let (cw, ch) = (cap.width, cap.height);
+    let (mut encode, kind) = encoder(cw, ch, fps, mbps, s.encoder)?;
+    label += &format!(" {cw}x{ch} · {fps} fps · {mbps} Mbps · {kind}");
     set_status(label);
 
-    send_json(stream, CONFIG, &json!({ "width": w, "height": h }))?;
+    send_json(stream, CONFIG, &json!({ "width": cw, "height": ch }))?;
 
     // Frame pacing: capture as fast as the desktop updates, send at most `fps`, and never
     // drop the last update of a burst (it's sent once the interval has passed).
-    let interval = Duration::from_secs(1) / s.fps.max(1);
+    let interval = Duration::from_secs(1) / fps.max(1);
     let (mut frame, mut nal) = (Vec::new(), Vec::new());
     let (mut last, mut pending) = (Instant::now() - interval, false);
     // Hardware decoders (the tablet's MediaTek one) hold a few frames before showing them, so a lone
@@ -217,14 +308,27 @@ fn stream_once(stream: &mut TcpStream, tablet: (u32, u32), target: &Mutex<Option
     const FLUSH: Duration = Duration::from_millis(250);
     let mut last_change = Instant::now() - FLUSH;
     // Fell back to mirroring because the driver was down: switch to extending once it's back.
-    let waiting_for_driver = s.mode == Mode::Extend && _virtual.is_none() && display::find_device().is_none();
-    let mut next_check = Instant::now();
-    while alive.load(Ordering::Relaxed) && settings::VERSION.load(Ordering::Relaxed) == version {
-        if waiting_for_driver && Instant::now() >= next_check {
-            if display::find_device().is_some() {
+    let waiting_for_driver = s.mode == Mode::Extend && virtual_display.is_none() && display::find_device().is_none();
+    // Once a second: ping for the round trip, and publish stats for the UI.
+    let mut tick = Instant::now();
+    let (mut frames, mut bytes, mut encode_time) = (0u32, 0usize, Duration::ZERO);
+    while shared.alive.load(Ordering::Relaxed) && settings::VERSION.load(Ordering::Relaxed) == version && !shared.rebuild.swap(false, Ordering::Relaxed) {
+        if tick.elapsed() >= Duration::from_secs(1) {
+            if waiting_for_driver && display::find_device().is_some() {
                 break;
             }
-            next_check = Instant::now() + Duration::from_secs(1);
+            let secs = tick.elapsed().as_secs_f32();
+            *STATS.lock().unwrap() = Some(Stats {
+                width: cw,
+                height: ch,
+                fps: frames as f32 / secs,
+                mbps: bytes as f32 * 8.0 / secs / 1e6,
+                encode_ms: if frames > 0 { encode_time.as_secs_f32() * 1000.0 / frames as f32 } else { 0.0 },
+                rtt_ms: shared.rtt_ms.load(Ordering::Relaxed),
+                tablet_fps: shared.tablet_fps.load(Ordering::Relaxed),
+            });
+            send_json(stream, PING, &json!({ "t": shared.start.elapsed().as_millis() as u64 }))?;
+            (tick, frames, bytes, encode_time) = (Instant::now(), 0, 0, Duration::ZERO);
         }
         let wait = interval.saturating_sub(last.elapsed()).as_millis().max(1) as u32;
         match cap.next(&mut frame, wait) {
@@ -238,14 +342,17 @@ fn stream_once(stream: &mut TcpStream, tablet: (u32, u32), target: &Mutex<Option
             }
         }
         if pending && last.elapsed() >= interval {
+            let t = Instant::now();
             encode(&frame, &mut nal)?;
+            encode_time += t.elapsed();
             if !nal.is_empty() {
                 write_msg(stream, VIDEO, &nal)?;
+                (frames, bytes) = (frames + 1, bytes + nal.len());
             }
             (last, pending) = (Instant::now(), false);
         }
     }
-    *target.lock().unwrap() = None;
+    *shared.target.lock().unwrap() = None;
     Ok(())
 }
 
@@ -277,16 +384,16 @@ fn open_capture(device: Option<&str>) -> io::Result<Capture> {
 type EncodeFn = Box<dyn FnMut(&[u8], &mut Vec<u8>) -> io::Result<()>>;
 
 /// Per the settings: GPU (Media Foundation), CPU (openh264), or GPU falling back to CPU.
-fn encoder(w: usize, h: usize, s: &Settings) -> io::Result<(EncodeFn, &'static str)> {
-    let bitrate = s.bitrate_mbps * 1_000_000;
-    if s.encoder != Encoder::Cpu {
-        match MfEncoder::new(w, h, s.fps, bitrate) {
+fn encoder(w: usize, h: usize, fps: u32, mbps: u32, choice: Encoder) -> io::Result<(EncodeFn, &'static str)> {
+    let bitrate = mbps * 1_000_000;
+    if choice != Encoder::Cpu {
+        match MfEncoder::new(w, h, fps, bitrate) {
             Ok(mut e) => return Ok((Box::new(move |f, out| e.encode(f, out).map_err(io::Error::other)), "GPU")),
-            Err(err) if s.encoder == Encoder::Gpu => return Err(io::Error::other(err)),
+            Err(err) if choice == Encoder::Gpu => return Err(io::Error::other(err)),
             Err(err) => eprintln!("hardware encoder unavailable ({err}), using openh264"),
         }
     }
-    let mut e = H264::new(w, h, s.fps, bitrate).map_err(io::Error::other)?;
+    let mut e = H264::new(w, h, fps, bitrate).map_err(io::Error::other)?;
     Ok((Box::new(move |f, out| e.encode(f, out).map_err(io::Error::other)), "CPU"))
 }
 
@@ -298,14 +405,28 @@ mod tests {
     fn framing_roundtrip() {
         let mut buf = Vec::new();
         write_msg(&mut buf, VIDEO, &[1, 2, 3]).unwrap();
-        write_msg(&mut buf, TOUCH, &[]).unwrap();
+        write_msg(&mut buf, INPUT, &[]).unwrap();
         let mut r = &buf[..];
         assert_eq!(read_msg(&mut r).unwrap(), (VIDEO, vec![1, 2, 3]));
-        assert_eq!(read_msg(&mut r).unwrap(), (TOUCH, vec![]));
+        assert_eq!(read_msg(&mut r).unwrap(), (INPUT, vec![]));
         assert!(read_msg(&mut r).is_err());
 
         let huge = [VIDEO, 0xff, 0xff, 0xff, 0xff];
         assert!(read_msg(&mut &huge[..]).is_err());
+    }
+
+    #[test]
+    fn quality_profiles() {
+        let tablet = (2304, 1440);
+        let mut s = Settings::default();
+        assert_eq!(plan(&s, tablet), ((2304, 1440), 60, 20)); // Balanced is the default
+        s.profile = Profile::Performance;
+        assert_eq!(plan(&s, tablet), ((1152, 720), 60, 10));
+        s.profile = Profile::Quality;
+        assert_eq!(plan(&s, tablet).2, 40);
+        s = Settings { profile: Profile::Custom, resolution: Some((2560, 1600)), fps: 90, bitrate_mbps: 30, ..s };
+        assert_eq!(plan(&s, tablet), ((2304, 1440), 90, 30)); // custom still fits the decoder
+        assert_eq!(plan(&s, (1440, 2304)).0, (2304, 1440)); // a portrait tablet decodes the landscape size too
     }
 
     #[test]
