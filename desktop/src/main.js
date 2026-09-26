@@ -183,6 +183,52 @@ $("autostart").onchange = async (e) => {
   $("autostart-state").textContent = on ? "Ligado" : "Desligado";
 };
 
+// ---- first-run guide ----
+const GUIDE_TABLET = `<p>Instale o app no tablet de um destes jeitos:</p><ol>
+  <li><b>USB com depuração:</b> ligue a depuração USB nas opções do desenvolvedor, conecte o cabo e use “Instalar app no tablet” na página Início.</li>
+  <li><b>USB sem depuração:</b> conecte o cabo, ligue o compartilhamento de internet por USB no tablet e toque no nome deste PC assim que aparecer.</li>
+  <li><b>Manual:</b> instale o APK do TabDisplay no tablet e conecte pelo Wi‑Fi (mesma rede do PC).</li></ol>`;
+const GUIDE_PAIR = `<p>Abra o TabDisplay no tablet e toque no nome deste PC.</p>
+  <ul><li><b>Wi‑Fi:</b> na primeira vez, o PC mostra um código de 6 dígitos; digite no tablet. Depois não é pedido mais.</li>
+  <li><b>Cabo USB:</b> não precisa de código, o cabo basta.</li></ul>`;
+
+async function guideSteps() {
+  const info = await invoke("ui_info");
+  const s = await invoke("status");
+  const mac = info.os === "macos";
+  const first = mac
+    ? { title: "Permissões do macOS", body: `<p>O TabDisplay pede três permissões:</p><ul>
+        <li><b>Gravação de Tela:</b> para enviar a imagem do Mac ao tablet.</li>
+        <li><b>Acessibilidade:</b> para o toque e a caneta do tablet controlarem o Mac.</li>
+        <li><b>Rede Local:</b> para o tablet achar este Mac e conectar.</li></ul><p class="muted">${DRIVER[s.driver] ?? ""}</p>` }
+    : { title: "Monitor virtual", body: `<p>O monitor virtual é o que faz o tablet virar uma segunda tela.</p><p class="muted">${DRIVER[s.driver] ?? ""}</p>${
+        s.driver === "ok" ? "" : "<p>Se algo falhou, use “Reiniciar” em Avançado ou reinstale o app.</p>"}` };
+  return [first, { title: "Instalar o app no tablet", body: GUIDE_TABLET }, { title: "Conectar e parear", body: GUIDE_PAIR }, { title: "Tudo pronto", body: "<p>Depois de conectado, escolha em <b>Início</b> se o tablet estende a tela ou espelha, e a qualidade em <b>Tela</b>.</p><p class=\"muted\">Você pode rever este guia em Avançado.</p>" }];
+}
+
+async function showGuide() {
+  const steps = await guideSteps();
+  let i = 0;
+  const draw = () => {
+    $("guide-title").textContent = steps[i].title;
+    $("guide-body").innerHTML = steps[i].body;
+    $("guide-step").textContent = `${i + 1} de ${steps.length}`;
+    $("guide-back").hidden = i === 0;
+    $("guide-next").textContent = i === steps.length - 1 ? "Concluir" : "Próximo";
+  };
+  const close = () => {
+    $("guide").close();
+    if (!settings.onboarded) save({ onboarded: true });
+  };
+  $("guide-skip").onclick = close;
+  $("guide-back").onclick = () => { i--; draw(); };
+  $("guide-next").onclick = () => (i === steps.length - 1 ? close() : (i++, draw()));
+  $("guide").oncancel = () => { if (!settings.onboarded) save({ onboarded: true }); }; // Esc counts as skipping
+  draw();
+  $("guide").showModal();
+}
+$("show-guide").onclick = showGuide;
+
 async function load() {
   const info = await invoke("ui_info");
   document.body.classList.toggle("mica", info.mica);
@@ -203,6 +249,7 @@ async function load() {
   render();
   refresh();
   setInterval(refresh, 1000);
+  if (!settings.onboarded) showGuide();
 }
 
 load();
