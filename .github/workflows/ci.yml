@@ -20,6 +20,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri
+      - name: Placeholders dos resources (baixados só no release)
+        shell: bash
+        run: mkdir -p resources/adb resources/vdd && touch resources/adb/x resources/vdd/x resources/tabdisplay.apk
       - run: cargo check --locked
       - run: cargo test --locked
 
