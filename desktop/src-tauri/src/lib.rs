@@ -5,6 +5,7 @@ mod settings;
 mod win {
     pub mod capture;
     pub mod display;
+    pub mod driver;
     pub mod encode;
     pub mod input;
 }
@@ -12,18 +13,25 @@ mod win {
 use settings::Settings;
 use std::net::UdpSocket;
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 use tauri::Manager;
-use win::{capture, display};
+use win::{capture, display, driver};
 
-/// (LAN IP, server status, virtual display driver state) for the UI.
+pub use win::driver::cli as driver_cli;
+
+/// Last result of the automatic `adb reverse`, shown in the UI.
+static USB: Mutex<&str> = Mutex::new("");
+
+/// (LAN IP, server status, virtual display driver state, USB state) for the UI.
 #[tauri::command]
-fn status() -> (String, String, &'static str) {
+fn status() -> (String, String, &'static str, &'static str) {
     // Connecting a UDP socket sends nothing; it just makes the OS pick the outbound interface.
     let ip = UdpSocket::bind("0.0.0.0:0")
         .and_then(|s| s.connect("8.8.8.8:80").and(s.local_addr()))
         .map(|a| a.ip().to_string())
         .unwrap_or_else(|_| "?".into());
-    (ip, server::STATUS.lock().unwrap().clone(), display::driver_state())
+    (ip, server::STATUS.lock().unwrap().clone(), display::driver_state(), *USB.lock().unwrap())
 }
 
 #[tauri::command]
@@ -53,18 +61,40 @@ async fn restart_driver() -> String {
     }
 }
 
-/// Forwards the tablet's localhost:PORT to this PC over USB.
-#[tauri::command]
-fn adb_reverse() -> String {
+/// adb from PATH if there is one, so we don't fight a different adb version (e.g. Android Studio's)
+/// over the shared adb server; otherwise the bundled copy.
+fn adb(args: &[&str]) -> std::io::Result<std::process::Output> {
+    static PATH: OnceLock<std::path::PathBuf> = OnceLock::new();
+    let path = PATH.get_or_init(|| {
+        let on_path = hidden(Command::new("adb").arg("version")).output().is_ok();
+        if on_path { "adb".into() } else { driver::resource(r"adb\adb.exe") }
+    });
+    hidden(Command::new(path).args(args)).output()
+}
+
+fn hidden(cmd: &mut Command) -> &mut Command {
+    std::os::windows::process::CommandExt::creation_flags(cmd, 0x0800_0000) // CREATE_NO_WINDOW
+}
+
+/// Keeps `adb reverse` set up so a tablet on the cable can reach this PC at its 127.0.0.1.
+// ponytail: polls adb every 3s; switch to `adb track-devices` if the process spawning ever matters.
+fn usb_forward() {
     let port = format!("tcp:{}", server::PORT);
-    let mut cmd = Command::new("adb");
-    cmd.args(["reverse", &port, &port]);
-    #[cfg(windows)]
-    std::os::windows::process::CommandExt::creation_flags(&mut cmd, 0x0800_0000); // CREATE_NO_WINDOW
-    match cmd.output() {
-        Ok(o) if o.status.success() => "USB pronto. No tablet, toque em USB.".into(),
-        Ok(o) => format!("adb: {}", String::from_utf8_lossy(&o.stderr).trim()),
-        Err(e) => format!("adb não encontrado no PATH ({e})"),
+    loop {
+        let ok = adb(&["reverse", &port, &port]).is_ok_and(|o| o.status.success());
+        *USB.lock().unwrap() = if ok { "Cabo USB: tablet pronto (toque em USB no tablet)" } else { "" };
+        std::thread::sleep(Duration::from_secs(3));
+    }
+}
+
+/// Installs the bundled tablet app over the cable (USB debugging must be on).
+#[tauri::command]
+async fn install_apk() -> String {
+    let apk = driver::resource("tabdisplay.apk");
+    match adb(&["install", "-r", &apk.display().to_string()]) {
+        Ok(o) if o.status.success() => "App instalado no tablet.".into(),
+        Ok(o) => format!("Falhou: {}", String::from_utf8_lossy(&o.stdout).trim()),
+        Err(e) => format!("adb indisponível ({e})"),
     }
 }
 
@@ -76,9 +106,10 @@ pub fn run() {
             let _ = display::ensure_modes(&[]);
             std::thread::spawn(server::run);
             std::thread::spawn(server::beacon);
+            std::thread::spawn(usb_forward);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![status, get_settings, set_settings, options, restart_driver, adb_reverse])
+        .invoke_handler(tauri::generate_handler![status, get_settings, set_settings, options, restart_driver, install_apk])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

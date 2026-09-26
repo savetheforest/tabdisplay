@@ -75,14 +75,12 @@ pub fn ensure_modes(extra: &[(u32, u32)]) -> io::Result<bool> {
     Ok(true)
 }
 
-/// Disables and re-enables the driver (UAC prompt). Clears Code 43 and reloads the mode list.
+/// Restarts the driver through `tabdisplay.exe --restart-driver` behind a UAC prompt; waits for it.
 pub fn restart_driver() -> io::Result<()> {
-    // `$ is escaped so the outer (non-elevated) PowerShell doesn't expand it inside the double quotes.
-    let dev = "Get-PnpDevice -Class Display -FriendlyName 'Virtual Display Driver'";
-    let ps = format!("{dev} | Disable-PnpDevice -Confirm:`$false; {dev} | Enable-PnpDevice -Confirm:`$false");
-    let outer = format!("Start-Process powershell -Verb RunAs -Wait -WindowStyle Hidden -ArgumentList '-NoProfile','-Command',\"{ps}\"");
+    let exe = std::env::current_exe()?.display().to_string().replace('\'', "''");
+    let ps = format!("Start-Process -FilePath '{exe}' -ArgumentList '--restart-driver' -Verb RunAs -Wait");
     let mut cmd = Command::new("powershell");
-    cmd.args(["-NoProfile", "-Command", &outer]);
+    cmd.args(["-NoProfile", "-Command", &ps]);
     std::os::windows::process::CommandExt::creation_flags(&mut cmd, 0x0800_0000); // CREATE_NO_WINDOW
     cmd.status()?;
     Ok(())

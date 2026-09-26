@@ -578,18 +578,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "desktop"
-version = "0.1.0"
-dependencies = [
- "openh264",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "windows",
-]
-
-[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3050,6 +3038,18 @@ dependencies = [
  "pkg-config",
  "toml 0.8.2",
  "version-compare",
+]
+
+[[package]]
+name = "tabdisplay"
+version = "0.1.0"
+dependencies = [
+ "openh264",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "windows",
 ]
 
 [[package]]

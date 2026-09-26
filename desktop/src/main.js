@@ -10,7 +10,8 @@ const DRIVER = {
 let settings;
 
 async function refresh() {
-  const [ip, status, driver] = await invoke("status");
+  const [ip, status, driver, usb] = await invoke("status");
+  $("usb").textContent = usb || "Cabo USB: nenhum tablet (precisa da depuração USB ligada)";
   $("ip").textContent = ip;
   $("status").textContent = status;
   $("driver").textContent = DRIVER[driver];
@@ -69,7 +70,12 @@ async function save() {
 
 $("form").addEventListener("change", save);
 $("bitrate_mbps").addEventListener("input", render);
-$("usb").onclick = async () => ($("msg").textContent = await invoke("adb_reverse"));
+$("install").onclick = async () => {
+  $("install").disabled = true;
+  $("msg").textContent = "Instalando…";
+  $("msg").textContent = await invoke("install_apk");
+  $("install").disabled = false;
+};
 $("restart").onclick = async () => {
   $("restart").disabled = true;
   $("driver").textContent = "Reiniciando…";
