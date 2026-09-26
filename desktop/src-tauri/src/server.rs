@@ -150,6 +150,8 @@ pub struct Stats {
     pub fps: f32,
     pub mbps: f32,
     pub encode_ms: f32,
+    /// "GPU" or "CPU": which encoder produced the current stream.
+    pub encoder_kind: &'static str,
     /// Round trip PC -> tablet -> PC.
     pub rtt_ms: u32,
     /// Frames the tablet actually showed per second.
@@ -353,6 +355,7 @@ fn stream_once(stream: &mut TcpStream, shared: &Shared, virtual_display: &mut Op
                 fps: frames as f32 / secs,
                 mbps: bytes as f32 * 8.0 / secs / 1e6,
                 encode_ms: if frames > 0 { encode_time.as_secs_f32() * 1000.0 / frames as f32 } else { 0.0 },
+                encoder_kind: kind,
                 rtt_ms: shared.rtt_ms.load(Ordering::Relaxed),
                 tablet_fps: shared.tablet_fps.load(Ordering::Relaxed),
             };
