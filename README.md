@@ -119,22 +119,18 @@ Chaves (uma vez): `cd desktop && npx tauri signer generate -w ~/.tabdisplay/upda
 fora do repositório** (backup!); a chave pública vai em `plugins.updater.pubkey`. Perdeu a privada: só um instalador
 novo, com outra chave pública, alcança os usuários.
 
-Publicar uma versão:
-1. Aumente a versão em `desktop/src-tauri/tauri.conf.json`, `Cargo.toml` e `desktop/package.json`.
-2. Em cada máquina (senha e caminho da chave no ambiente):
-   ```
-   export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tabdisplay/updater.key)" TAURI_SIGNING_PRIVATE_KEY_PASSWORD=...
-   # Windows (PowerShell: $env:...):  cd desktop; npx tauri build --config src-tauri/tauri.release.conf.json
-   # Mac:                              cd desktop; cargo tauri build --bundles app,dmg --config src-tauri/tauri.release.conf.json
-   ```
-   Saem o instalador (`*-setup.exe` / `.dmg`), o pacote de atualização (`*-setup.exe` / `TabDisplay.app.tar.gz`) e os `.sig`.
-3. Monte o manifesto (cada máquina contribui com a sua plataforma; `--merge` junta):
-   ```
-   node scripts/make-latest-json.mjs 0.2.0 https://github.com/<dono>/tabdisplay/releases/download/v0.2.0 --notes "o que mudou"
-   node scripts/make-latest-json.mjs 0.2.0 <mesma-url> --bundle <pasta-do-mac> --merge latest.json
-   ```
-4. `gh release create v0.2.0 <instalador> <tar.gz> <.sig> latest.json`. O app só enxerga a release se o endereço for público
-   (repositório público ou um endpoint próprio: troque `endpoints`).
+Publicar uma versão: aumente a versão em `desktop/src-tauri/tauri.conf.json`, `Cargo.toml` e `desktop/package.json`,
+commite na `main` e empurre uma tag `vX.Y.Z` igual (`git tag v0.2.1 && git push origin v0.2.1`). O job `publish` do
+`.github/workflows/build.yml` builda Windows e Mac assinados (usa os secrets `TAURI_SIGNING_PRIVATE_KEY*` já configurados),
+monta o `latest.json` com `scripts/make-latest-json.mjs` e publica tudo numa GitHub Release — sozinho, sem passo manual.
+O app só enxerga a release se o endereço for público (repositório público, ou troque `endpoints` por um endpoint próprio).
+
+Rodando `make-latest-json.mjs` manualmente (build feito à mão fora do CI, ex. para testar num Mac local):
+```
+export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tabdisplay/updater.key)" TAURI_SIGNING_PRIVATE_KEY_PASSWORD=...
+cd desktop && cargo tauri build --bundles app,dmg --config src-tauri/tauri.release.conf.json
+node ../scripts/make-latest-json.mjs 0.2.1 https://github.com/<dono>/tabdisplay/releases/download/v0.2.1 --notes "o que mudou"
+```
 
 ## Build automático (GitHub Actions)
 A cada merge na main, `.github/workflows/build.yml` gera, como artefatos da execução (aba Actions → a execução → Artifacts, 30 dias):
@@ -143,6 +139,8 @@ A cada merge na main, `.github/workflows/build.yml` gera, como artefatos da exec
 - `tabdisplay-macos`: `TabDisplay_<versão>_aarch64.dmg` (Apple Silicon).
 
 Também dá para rodar sob demanda (Actions → Build → Run workflow). Nos pull requests roda só o `ci.yml` (compila e testa).
+Numa tag `vX.Y.Z` roda mais um job, `publish`, que junta os artefatos do Windows e do Mac numa GitHub Release pública com
+o `latest.json` do atualizador (veja "Atualização automática" acima).
 Sem segredos o build sai igual, mas sem assinatura: o APK usa a chave de debug do runner (serve para testar; não atualiza um app instalado com a chave de release),
 o instalador do Windows fica sem assinatura e o app do Mac sem Developer ID. Para assinar de verdade, cadastre em Settings → Secrets and variables → Actions:
 

@@ -2,6 +2,8 @@ name: Build
 
 # A cada merge na main (ou manualmente): gera o APK/AAB do Android e o instalador do Windows e do Mac.
 # Os arquivos ficam como artefatos da execução (Actions > a execução > Artifacts, guardados por 30 dias).
+# Ao empurrar uma tag `vX.Y.Z`: além disso, publica uma GitHub Release com esses artefatos e o
+# `latest.json` do atualizador (job `publish`), para o endpoint em `plugins.updater.endpoints` responder.
 #
 # Segredos opcionais (Settings > Secrets and variables > Actions). Sem eles o build sai igual, só que sem
 # assinatura / sem relatório de erros:
@@ -13,6 +15,7 @@ name: Build
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
 
 concurrency:
@@ -189,3 +192,40 @@ jobs:
             desktop/src-tauri/target/release/bundle/macos/*.app.tar.gz
             desktop/src-tauri/target/release/bundle/macos/*.app.tar.gz.sig
           retention-days: 30
+
+  # Só numa tag `vX.Y.Z`: junta o que windows/macos geraram numa GitHub Release pública, com o
+  # `latest.json` que o updater dos apps já instalados vai ler. Publicar uma versão nova é só empurrar a tag.
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          name: tabdisplay-windows
+          path: win-bundle
+      - uses: actions/download-artifact@v4
+        with:
+          name: tabdisplay-macos
+          path: mac-bundle
+      - name: latest.json
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          base_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
+          node scripts/make-latest-json.mjs "$version" "$base_url" --bundle win-bundle
+          node scripts/make-latest-json.mjs "$version" "$base_url" --bundle mac-bundle --merge latest.json
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mapfile -d '' assets < <(find win-bundle mac-bundle -type f \( \
+            -iname '*-setup.exe' -o -iname '*-setup.exe.sig' -o -iname '*.dmg' \
+            -o -iname '*.app.tar.gz' -o -iname '*.app.tar.gz.sig' \) -print0)
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" latest.json \
+            --title "TabDisplay $GITHUB_REF_NAME" --generate-notes
