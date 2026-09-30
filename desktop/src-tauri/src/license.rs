@@ -123,7 +123,10 @@ mod tests {
         let sig = TOKEN.rsplit_once('.').unwrap().1;
         assert!(verify(&format!("TDL1.{forged_payload}.{sig}"), &public_key()).is_err());
         // Flipped signature bit, truncated, garbage.
-        assert!(verify(&TOKEN.replace("kCvm", "kCvn"), &public_key()).is_err());
+        let mut flipped = TOKEN.as_bytes().to_vec();
+        let last = flipped.len() - 1;
+        flipped[last] = if flipped[last] == b'A' { b'B' } else { b'A' };
+        assert!(verify(std::str::from_utf8(&flipped).unwrap(), &public_key()).is_err());
         assert!(verify(&TOKEN[..TOKEN.len() - 4], &public_key()).is_err());
         assert!(verify("lixo", &public_key()).is_err());
         // Signed by some other key.
