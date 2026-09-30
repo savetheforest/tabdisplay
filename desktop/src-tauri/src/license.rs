@@ -103,7 +103,7 @@ mod tests {
     use super::*;
 
     // Issued by `node scripts/license.mjs issue "Teste da Silva" "teste@example.com"` with the real key.
-    const TOKEN: &str = "TDL1.eyJuYW1lIjoiVGVzdGUgZGEgU2lsdmEiLCJlbWFpbCI6InRlc3RlQGV4YW1wbGUuY29tIiwiaXNzdWVkIjoiMjAyNi0wOS0yNiJ9.kCvmPlFodH9CxOLKyWVNzrYg_M2CFFU4QrQT5fOwkYaUKJddOsv8elB28Xme8SbW2F5jW8KFOFryu9LmOBpTDA";
+    const TOKEN: &str = "TDL1.eyJuYW1lIjoiVGVzdGUgZGEgU2lsdmEiLCJlbWFpbCI6InRlc3RlQGV4YW1wbGUuY29tIiwiaXNzdWVkIjoiMjAyNi0wOS0yNiJ9.edk6ZNYWHdW_0lZPEyJDiTS_IHbZEteUr0lVTRvNOTmsNUu1IhuZKPLlYnJbXHFr-Nckm_sOxodSDVQlp_bFBw";
 
     #[test]
     fn accepts_a_licence_from_the_script() {
