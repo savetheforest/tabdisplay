@@ -285,4 +285,10 @@ impl VirtualDisplay {
         self.applied = Some((w, h, hz, pos));
         Ok(())
     }
+
+    /// Effective dimensions, refresh and requested placement (macOS applies the mode synchronously,
+    /// so this is simply what was last accepted).
+    pub fn effective_mode(&self) -> Option<(u32, u32, u32, Position)> {
+        self.applied
+    }
 }

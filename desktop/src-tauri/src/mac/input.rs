@@ -223,10 +223,12 @@ impl Injector {
                     t.at = at;
                 }
             }
-            Action::Up => {
+            Action::Up | Action::Cancel => {
                 let Some(t) = self.touch.take() else { return };
                 if t.dragging {
                     post(LEFT_UP, at, 0, 1, None);
+                } else if c.action == Action::Cancel {
+                    // Release without synthesizing the tap/right-click this contact never completed.
                 } else if t.start.elapsed() >= HOLD_FOR_RIGHT_CLICK {
                     post(RIGHT_DOWN, t.at, 1, 1, None);
                     post(RIGHT_UP, t.at, 1, 1, None);
@@ -331,7 +333,7 @@ impl Injector {
                     );
                 }
             }
-            Action::Up | Action::Leave => {
+            Action::Up | Action::Cancel | Action::Leave => {
                 if let Some((dragged, up)) = self.pen_button.take() {
                     post(
                         up,
