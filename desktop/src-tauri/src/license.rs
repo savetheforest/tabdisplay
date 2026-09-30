@@ -9,7 +9,7 @@ use std::sync::{Mutex, OnceLock};
 
 /// Public half of the seller's key (`node scripts/license.mjs keygen`).
 const PUBLIC_KEY: [u8; 32] =
-    hex(b"de9f963be453d77eba4f48c7ac5394f4cda06f9e3e9ac094a55bdd4c9542ed56");
+    hex(b"0c20a8b32477bae13210cc3b849dba24a60cad7053d7c20b12b44b2c4f5df3d8");
 /// Where the "buy" button in the app goes. ponytail: placeholder until the store page exists.
 pub const BUY_URL: &str = "https://github.com/savetheforest/tabdisplay";
 
