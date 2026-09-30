@@ -2,6 +2,10 @@ package com.tabdisplay
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.ClipboardManager
+import android.content.ClipData
+import android.content.Intent
+import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.os.Build
@@ -14,6 +18,8 @@ import android.view.SurfaceView
 import android.view.WindowInsets
 import android.view.WindowInsetsController
 import android.view.WindowManager
+import android.Manifest
+import android.content.pm.PackageManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -105,9 +111,12 @@ class MainActivity : ComponentActivity() {
     private var video by mutableStateOf<Pair<Int, Int>?>(null)
     private var stats by mutableStateOf<String?>(null)
     private var showStats by mutableStateOf(false)
+    private var showDiagnostics by mutableStateOf(false)
     private var muted by mutableStateOf(false)
     /** The PC's active quality preset, as last reported. */
     private var profile by mutableStateOf<String?>(null)
+    /** Text received from the PC waits for an explicit copy or discard action. */
+    private var incomingText by mutableStateOf<Pair<String, String>?>(null)
 
     private var stream: Stream? = null
     private var discovery: Discovery? = null
@@ -117,11 +126,14 @@ class MainActivity : ComponentActivity() {
     private var pendingRetry: Runnable? = null
     /** The video surface is gone (screen locked / another app in front) while a session is open. */
     private var backgrounded = false
+    /** Monotonic owner for a connection attempt; callbacks from an older attempt are ignored. */
+    private var sessionId = 0L
+    /** Certificate candidates are memory-only until pairing/token authentication has succeeded. */
+    private val candidatePins = mutableMapOf<String, String>()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         showStats = prefs.getBoolean("show_stats", false)
         muted = prefs.getBoolean("muted", false)
         setContent {
@@ -136,11 +148,10 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        if (isFinishing) {
-            stream?.close()
-            stream = null
-            SessionService.stop(this)
-        }
+        sessionId++
+        stream?.close()
+        stream = null
+        SessionService.stop(this)
         stopDiscovery()
         super.onDestroy()
     }
@@ -177,6 +188,12 @@ class MainActivity : ComponentActivity() {
                 }
 
                 Text(stringResource(R.string.computers), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp).semantics { heading() })
+                Text(
+                    stringResource(if (message != null) R.string.state_error else if (reconnecting != null) R.string.state_reconnecting else if (pcs.isEmpty()) R.string.state_searching else R.string.state_ready),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                )
                 if (pcs.isEmpty()) {
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 16.dp)) {
                         CircularProgressIndicator(Modifier.size(20.dp).clearAndSetSemantics {}, strokeWidth = 2.dp) // the text beside it says it all
@@ -215,20 +232,20 @@ class MainActivity : ComponentActivity() {
     @Composable
     private fun PcCard(pc: Discovery.Pc) {
         val paired = pc.id?.let { prefs.getString("token_$it", null) } != null
-        ElevatedCard(onClick = { autoConnect = true; connect(pc.host, pc.id, pc.name) }, modifier = Modifier.fillMaxWidth()) {
+        ElevatedCard(onClick = { autoConnect = true; connect(pc.host, pc.id ?: prefs.getString("pc_at_${pc.host}", null), pc.name) }, modifier = Modifier.fillMaxWidth()) {
             ListItem(
                 colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                 leadingContent = {
                     Surface(shape = CircleShape, color = MaterialTheme.colorScheme.primaryContainer, modifier = Modifier.size(40.dp)) {
                         Box(contentAlignment = Alignment.Center) {
-                            Text(stringResource(if (pc.usb) R.string.badge_usb else R.string.badge_pc), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                            Text(stringResource(R.string.badge_pc), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
                         }
                     }
                 },
-                headlineContent = { Text(if (pc.usb) stringResource(R.string.pc_via_usb) else pc.name, fontWeight = FontWeight.Medium) },
-                supportingContent = { Text(if (pc.usb) stringResource(R.string.usb_no_pairing) else stringResource(R.string.wifi_host, pc.host)) },
+                headlineContent = { Text(if (pc.local) stringResource(R.string.pc_via_local) else pc.name, fontWeight = FontWeight.Medium) },
+                supportingContent = { Text(if (pc.local) stringResource(R.string.local_endpoint) else stringResource(R.string.wifi_host, pc.host)) },
                 trailingContent = {
-                    if (!pc.usb) {
+                    if (!pc.local) {
                         Text(
                             stringResource(if (paired) R.string.paired else R.string.new_pc),
                             style = MaterialTheme.typography.labelMedium,
@@ -299,6 +316,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         var menu by remember { mutableStateOf(false) }
+        var showKeyboard by remember { mutableStateOf(false) }
         val screenDescription = stringResource(R.string.a11y_screen)
         val menuDescription = stringResource(R.string.a11y_menu)
         Box(Modifier.fillMaxSize().background(Color.Black)) {
@@ -333,10 +351,10 @@ class MainActivity : ComponentActivity() {
                     onClick = { menu = true },
                     color = Color.Black.copy(alpha = 0.45f),
                     shape = RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp),
-                    modifier = Modifier.size(width = 72.dp, height = 20.dp).semantics { contentDescription = menuDescription; role = Role.Button },
+                    modifier = Modifier.size(width = 96.dp, height = 48.dp).semantics { contentDescription = menuDescription; role = Role.Button },
                 ) {
                     Box(contentAlignment = Alignment.Center) {
-                        Box(Modifier.size(width = 28.dp, height = 3.dp).background(Color.White.copy(alpha = 0.8f), CircleShape))
+                        Box(Modifier.size(width = 36.dp, height = 4.dp).background(Color.White.copy(alpha = 0.8f), CircleShape))
                     }
                 }
                 DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
@@ -358,6 +376,25 @@ class MainActivity : ComponentActivity() {
                     if (profile == "custom") {
                         DropdownMenuItem(text = { Text(stringResource(R.string.profile_custom)) }, trailingIcon = { Text("✓") }, enabled = false, onClick = {})
                     }
+                    DropdownMenuItem(text = { Text(stringResource(R.string.diagnostics)) }, onClick = { menu = false; showDiagnostics = true })
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.send_copied_text)) },
+                        onClick = {
+                            menu = false
+                            val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+                            val text = clipboard.primaryClip?.getItemAt(0)?.coerceToText(this@MainActivity)?.toString()
+                            if (text == null) {
+                                android.widget.Toast.makeText(this@MainActivity, R.string.clipboard_empty, android.widget.Toast.LENGTH_SHORT).show()
+                            } else {
+                                runCatching { stream?.sendText(text) }.onSuccess {
+                                    android.widget.Toast.makeText(this@MainActivity, R.string.text_sent, android.widget.Toast.LENGTH_SHORT).show()
+                                }.onFailure {
+                                    android.widget.Toast.makeText(this@MainActivity, R.string.text_too_large, android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                    )
+                    DropdownMenuItem(text = { Text(stringResource(R.string.keyboard)) }, onClick = { menu = false; showKeyboard = true })
                     DropdownMenuItem(
                         text = { Text(stringResource(if (muted) R.string.unmute_audio else R.string.mute_audio)) },
                         onClick = {
@@ -371,6 +408,93 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        if (showDiagnostics) DiagnosticsDialog(target) { showDiagnostics = false }
+        incomingText?.let { (sender, text) ->
+            TextReceivedDialog(sender, text) { incomingText = null }
+        }
+        if (showKeyboard) KeyboardDialog { showKeyboard = false }
+    }
+
+    @Composable
+    private fun TextReceivedDialog(sender: String, text: String, close: () -> Unit) {
+        AlertDialog(
+            onDismissRequest = close,
+            title = { Text(stringResource(R.string.text_received_title)) },
+            text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(stringResource(R.string.text_received_from, sender))
+                Text(text, style = MaterialTheme.typography.bodyMedium)
+                Text(stringResource(R.string.text_received_hint), style = MaterialTheme.typography.bodySmall)
+            } },
+            confirmButton = { TextButton(onClick = {
+                val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("TabDisplay", text))
+                close()
+            }) { Text(stringResource(R.string.copy_text)) } },
+            dismissButton = { TextButton(onClick = close) { Text(stringResource(R.string.discard_text)) } },
+        )
+    }
+
+    @Composable
+    private fun KeyboardDialog(close: () -> Unit) {
+        var text by remember { mutableStateOf("") }
+        var modifiers by remember { mutableStateOf(0) }
+        val toggle: (Int) -> Unit = { bit -> modifiers = modifiers xor bit }
+        AlertDialog(
+            onDismissRequest = close,
+            title = { Text(stringResource(R.string.keyboard)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(stringResource(R.string.keyboard_hint), style = MaterialTheme.typography.bodySmall)
+                    OutlinedTextField(
+                        value = text,
+                        onValueChange = { text = it },
+                        label = { Text(stringResource(R.string.keyboard_text_label)) },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+                        minLines = 2,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        for ((label, bit) in listOf("Ctrl" to Protocol.MOD_CTRL, "Shift" to Protocol.MOD_SHIFT, "Alt" to Protocol.MOD_ALT)) {
+                            TextButton(onClick = { toggle(bit) }) { Text(if (modifiers and bit != 0) "✓ $label" else label) }
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        for (key in listOf("Enter", "Backspace", "Tab", "Escape", "ArrowLeft", "ArrowRight")) {
+                            TextButton(onClick = { stream?.sendKey(key, modifiers) }) { Text(key) }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = {
+                runCatching { stream?.sendKeyText(text) }
+                text = ""
+            }) { Text(stringResource(R.string.send_text)) } },
+            dismissButton = { TextButton(onClick = close) { Text(stringResource(R.string.cancel)) } },
+        )
+    }
+
+    @Composable
+    private fun DiagnosticsDialog(target: Screen.Display, close: () -> Unit) {
+        AlertDialog(
+            onDismissRequest = close,
+            title = { Text(stringResource(R.string.diagnostics)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(stringResource(R.string.diagnostics_text, target.name, target.host, profile ?: "—", stats ?: "—"))
+                    Text(stringResource(R.string.diagnostics_limit), style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val intent = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, Crumbs.exportText())
+                    }
+                    startActivity(Intent.createChooser(intent, getString(R.string.export_diagnostics)))
+                    close()
+                }) { Text(stringResource(R.string.export_diagnostics)) }
+            },
+            dismissButton = { TextButton(onClick = close) { Text(stringResource(R.string.cancel)) } },
+        )
     }
 
     /** The video surface. The session outlives it: on lock / app switch only the decoder stops (see [Stream.detach]). */
@@ -381,44 +505,87 @@ class MainActivity : ComponentActivity() {
         view.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(holder: SurfaceHolder) {
                 val bounds = windowManager.currentWindowMetrics.bounds
-                val (w, h) = decodableSize(bounds.width(), bounds.height())
+                val candidates = decoderCapabilities(bounds.width(), bounds.height())
+                val selected = VideoNegotiation.select(candidates) ?: run {
+                    endSession(getString(R.string.no_decoder))
+                    return
+                }
+                val initial = VideoNegotiation.modeFor(selected, bounds.width(), bounds.height(), 60)
+                    ?: selected.modes.maxBy { it.width.toLong() * it.height }
+                val (w, h) = initial.width to initial.height
                 sentSize = w to h
                 backgrounded = false
+                window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 // Coming back from lock / another app: the session is still alive, just give it the new surface.
-                stream?.let { it.attach(holder.surface, w, h); return }
-                SessionService.start(this@MainActivity, target.name)
+                stream?.let {
+                    SessionService.resume(this@MainActivity, target.name)
+                    it.attach(holder.surface, w, h)
+                    return
+                }
+                if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                    requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_REQUEST)
+                }
+                val owner = sessionId
+                val service = runCatching { SessionService.start(this@MainActivity, target.name) }
+                if (service.isFailure) {
+                    val error = service.exceptionOrNull()!!
+                    endSession(getString(R.string.error_generic, error.message ?: error.javaClass.simpleName))
+                    return
+                }
                 val hello = JSONObject()
-                    .put("v", 3)
+                    .put("v", Protocol.VERSION)
                     .put("device_id", deviceId)
                     .put("device_name", deviceName)
                     .put("token", target.pcId?.let { prefs.getString("token_$it", null) } ?: "")
                     .put("screen", JSONArray(listOf(bounds.width(), bounds.height())))
                     .put("decodable", JSONArray(listOf(w, h)))
+                    .put("video_modes", JSONArray().apply {
+                        selected.modes.forEach { mode ->
+                            put(JSONObject().put("width", mode.width).put("height", mode.height).put("fps", mode.fps))
+                        }
+                    })
+                    .put("audio_timestamps", true)
+                    .put("text_transfer", true)
+                    .put("keyboard", true)
                     .put("dpi", resources.displayMetrics.densityDpi)
-                stream = Stream(applicationContext, target.host, holder.surface, hello, object : StreamEvents {
+                stream = Stream(applicationContext, target.host, holder.surface, hello, candidates.map { it.name }, object : StreamEvents {
                     override fun onVideoSize(width: Int, height: Int) = runOnUiThread {
+                        if (owner != sessionId) return@runOnUiThread
+                        target.pcId?.let { pcId ->
+                            candidatePins.remove(target.host)?.let { fingerprint ->
+                                if (prefs.getString("pin_$pcId", null) == null) prefs.edit().putString("pin_$pcId", fingerprint).apply()
+                            }
+                        }
                         attempts = 0 // the session works: next drop retries quickly again
                         video = width to height
                     }
-                    override fun onPairRequired(pcName: String, wrong: Boolean) = runOnUiThread { pairing = PairRequest(pcName, wrong) }
+                    override fun onPairRequired(pcName: String, wrong: Boolean) = runOnUiThread {
+                        if (owner == sessionId) pairing = PairRequest(pcName, wrong)
+                    }
                     override fun onPaired(pcId: String, token: String) {
-                        prefs.edit().putString("token_$pcId", token).putString("pc_at_${target.host}", pcId).apply()
+                        if (owner == sessionId) {
+                            val candidate = candidatePins.remove(target.host)
+                            prefs.edit().putString("last_pc", pcId).putString("token_$pcId", token).putString("pc_at_${target.host}", pcId).apply {
+                                if (candidate != null) putString("pin_$pcId", candidate)
+                            }.apply()
+                        }
                     }
                     // Trust on first use: pin the PC's certificate; a different one later means another machine answered.
                     override fun onServerCertificate(fingerprint: String): Boolean {
                         val key = "pin_" + (target.pcId ?: target.host)
                         val pinned = prefs.getString(key, null)
-                        if (pinned == null) prefs.edit().putString(key, fingerprint).apply()
-                        if (pinned == null || pinned == fingerprint) return true
-                        // Forget the PC so the next attempt pairs (and pins) again, with the code shown on the PC.
-                        prefs.edit().remove(key).apply { target.pcId?.let { remove("token_$it") } }.apply()
-                        return false
+                        if (pinned != null && pinned != fingerprint) return false
+                        candidatePins[target.host] = fingerprint
+                        return true
                     }
-                    override fun onProfile(profile: String) = runOnUiThread { this@MainActivity.profile = profile }
+                    override fun onProfile(profile: String) = runOnUiThread { if (owner == sessionId) this@MainActivity.profile = profile }
                     override fun onStats(shownFps: Int, rttMs: Int, mbps: Double) = runOnUiThread {
-                        stats = getString(R.string.stats_format, shownFps, rttMs, "%.1f".format(mbps))
+                        if (owner == sessionId) stats = getString(R.string.stats_format, shownFps, rttMs, "%.1f".format(mbps))
                     }
-                    override fun onClose(reason: String) = runOnUiThread { endSession(reason) }
+                    override fun onTextReceived(sender: String, text: String) = runOnUiThread {
+                        if (owner == sessionId) incomingText = sender to text
+                    }
+                    override fun onClose(reason: String) = runOnUiThread { if (owner == sessionId) endSession(reason) }
                 }).also { it.muted = muted; it.start() }
             }
 
@@ -434,6 +601,8 @@ class MainActivity : ComponentActivity() {
 
             override fun surfaceDestroyed(holder: SurfaceHolder) {
                 backgrounded = true
+                window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                SessionService.pause(this@MainActivity)
                 stream?.detach()
             }
         })
@@ -452,12 +621,16 @@ class MainActivity : ComponentActivity() {
     // ---- session control -----------------------------------------------------------------------------
 
     private fun connect(host: String, pcId: String?, name: String) {
+        sessionId++
+        stream?.close()
+        stream = null
+        candidatePins.clear()
         pendingRetry?.let(handler::removeCallbacks)
         pendingRetry = null
         reconnecting = null
         video = null
         stats = null
-        prefs.edit().putString("last_pc", pcId ?: if (host == "127.0.0.1") "usb" else null).apply()
+        prefs.edit().putString("last_pc", pcId ?: if (host == "127.0.0.1") "local" else null).apply()
         screen = Screen.Display(host, pcId, name)
     }
 
@@ -475,6 +648,8 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun endSession(reason: String?) {
+        sessionId++
+        stream?.close()
         stream = null
         SessionService.stop(this)
         // Say why the list is back when the session died while the screen was locked / the app hidden.
@@ -484,6 +659,9 @@ class MainActivity : ComponentActivity() {
         video = null
         stats = null
         profile = null
+        if (!SessionRetry.allowsAutomaticRetry(reason)) {
+            autoConnect = false
+        }
         screen = Screen.Connect(shown)
     }
 
@@ -509,14 +687,14 @@ class MainActivity : ComponentActivity() {
     private fun maybeReconnect(found: List<Discovery.Pc>) {
         if (!autoConnect || pendingRetry != null) return
         val last = prefs.getString("last_pc", null) ?: return
-        val pc = found.firstOrNull { if (last == "usb") it.usb else it.id == last } ?: return
-        val delay = RETRY_DELAYS_MS[attempts.coerceAtMost(RETRY_DELAYS_MS.lastIndex)]
-        val name = if (pc.usb) getString(R.string.pc_via_cable) else pc.name
+        val pc = found.firstOrNull { if (last == "local") it.local else it.id == last } ?: return
+        val delay = SessionRetry.delayMs(attempts)
+        val name = if (pc.local) getString(R.string.pc_via_local) else pc.name
         reconnecting = if (delay > 0) getString(R.string.reconnecting_in, name, delay / 1000) else getString(R.string.connecting_to, name)
         pendingRetry = Runnable {
             pendingRetry = null
             attempts++
-            connect(pc.host, pc.id, name)
+        connect(pc.host, pc.id ?: prefs.getString("pc_at_${pc.host}", null), name)
         }.also { handler.postDelayed(it, delay) }
     }
 
@@ -535,20 +713,32 @@ class MainActivity : ComponentActivity() {
      * The Redmi Pad 2 screen is 2560x1600 but its decoder tops out at 2560x1440, so this gives 2304x1440
      * and the view scales it up.
      */
-    private fun decodableSize(width: Int, height: Int): Pair<Int, Int> {
-        val caps = MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos
-            .filter { !it.isEncoder && MediaFormat.MIMETYPE_VIDEO_AVC in it.supportedTypes }
-            .map { it.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC).videoCapabilities }
-        for (percent in 100 downTo 25) {
-            val w = width * percent / 100 and 15.inv()
-            val h = height * percent / 100 and 15.inv()
-            if (caps.any { it.areSizeAndRateSupported(w, h, 60.0) }) return w to h
+    private fun decoderCapabilities(width: Int, height: Int): List<DecoderCapability> =
+        MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos.mapNotNull { info ->
+            if (info.isEncoder || MediaFormat.MIMETYPE_VIDEO_AVC !in info.supportedTypes || info.name.endsWith(".secure")) return@mapNotNull null
+            val capabilities = runCatching { info.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC) }.getOrNull() ?: return@mapNotNull null
+            if (capabilities.isFeatureRequired(MediaCodecInfo.CodecCapabilities.FEATURE_TunneledPlayback)) return@mapNotNull null
+            val video = capabilities.videoCapabilities ?: return@mapNotNull null
+            val modes = VideoNegotiation.standardFps.mapNotNull { fps ->
+                (100 downTo 25).asSequence().mapNotNull { percent ->
+                    val w = (width * percent / 100) and 15.inv()
+                    val h = (height * percent / 100) and 15.inv()
+                    if (w >= Protocol.MIN_DIMENSION && h >= Protocol.MIN_DIMENSION && video.areSizeAndRateSupported(w, h, fps.toDouble())) {
+                        VideoMode(w, h, fps)
+                    } else null
+                }.firstOrNull()
+            }
+            DecoderCapability(info.name, info.canonicalName, info.isHardwareAccelerated, info.isSoftwareOnly, modes)
         }
-        return 1280 to 720
+
+    private fun decodableSize(width: Int, height: Int): Pair<Int, Int> {
+        val selected = VideoNegotiation.select(decoderCapabilities(width, height)) ?: return 1280 to 720
+        val mode = VideoNegotiation.modeFor(selected, width, height, 60) ?: return 1280 to 720
+        return mode.width to mode.height
     }
 
     private companion object {
-        val RETRY_DELAYS_MS = listOf(0L, 1000L, 2000L, 5000L, 10000L)
+        const val NOTIFICATION_REQUEST = 1001
     }
 }
 

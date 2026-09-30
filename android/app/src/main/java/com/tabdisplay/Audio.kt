@@ -10,6 +10,22 @@ import java.nio.ByteOrder
 
 private const val RATE = 48_000
 private const val CHANNELS = 2
+private const val AUDIO_HEADER_VERSION = 1
+private const val AUDIO_HEADER_SIZE = 17
+
+data class AudioPacket(val sequence: Long?, val ptsSamples: Long?, val opus: ByteArray) {
+    companion object {
+        fun decode(payload: ByteArray): AudioPacket {
+            if (payload.size >= AUDIO_HEADER_SIZE && payload[0].toInt() == AUDIO_HEADER_VERSION) {
+                val header = ByteBuffer.wrap(payload).order(ByteOrder.BIG_ENDIAN)
+                header.get()
+                return AudioPacket(header.long, header.long, payload.copyOfRange(AUDIO_HEADER_SIZE, payload.size))
+            }
+            // Legacy v3 clients received raw Opus packets; keep mixed-version upgrades safe.
+            return AudioPacket(null, null, payload)
+        }
+    }
+}
 
 /**
  * Plays the PC's audio (AUDIO messages, PROTOCOL.md): Opus packets -> MediaCodec -> AudioTrack.
@@ -21,10 +37,12 @@ class Audio {
     private val track: AudioTrack
     private val info = MediaCodec.BufferInfo()
     private var pts = 0L
+    private var lastSequence: Long? = null
     @Volatile var muted = false
         set(value) {
             field = value
             track.setVolume(if (value) 0f else 1f)
+            if (value) runCatching { track.pause(); track.flush(); track.play() }
         }
 
     init {
@@ -54,24 +72,51 @@ class Audio {
         track.play()
     }
 
-    /** Decodes one Opus packet and queues the PCM for playback. */
-    fun play(packet: ByteArray) {
+    /** Decodes one Opus packet and queues the PCM. A sequence gap flushes stale PCM. */
+    fun play(packet: AudioPacket) {
+        val sequence = packet.sequence
+        if (sequence != null && lastSequence != null && sequence != lastSequence!! + 1L) {
+            runCatching { codec.flush(); track.pause(); track.flush(); track.play() }
+        }
+        lastSequence = sequence ?: lastSequence?.plus(1L)
+        val inputPts = packet.ptsSamples?.let { it * 1_000_000L / RATE } ?: pts
         val i = codec.dequeueInputBuffer(0)
         if (i >= 0) {
-            codec.getInputBuffer(i)!!.apply { clear(); put(packet) }
-            codec.queueInputBuffer(i, 0, packet.size, pts, 0)
-            pts += 20_000
+            val input = codec.getInputBuffer(i) ?: return
+            input.clear()
+            input.put(packet.opus)
+            codec.queueInputBuffer(i, 0, packet.opus.size, inputPts, 0)
+            pts = inputPts + 20_000
         }
         while (true) {
             val o = codec.dequeueOutputBuffer(info, 0)
-            if (o < 0) break // also covers INFO_OUTPUT_FORMAT_CHANGED etc.: nothing to write
-            codec.getOutputBuffer(o)?.let { track.write(it, info.size, AudioTrack.WRITE_NON_BLOCKING) }
+            if (o == MediaCodec.INFO_TRY_AGAIN_LATER) break
+            if (o == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) continue
+            if (o < 0) break
+            val output = codec.getOutputBuffer(o)
+            if (output != null && info.size > 0) {
+                val start = info.offset.coerceAtLeast(0)
+                val end = (start + info.size).coerceAtMost(output.limit())
+                if (end > start) {
+                    val bytes = ByteArray(end - start)
+                    output.duplicate().apply { position(start); limit(end); get(bytes) }
+                    var offset = 0
+                    while (offset < bytes.size) {
+                        val written = track.write(bytes, offset, bytes.size - offset, AudioTrack.WRITE_NON_BLOCKING)
+                        if (written <= 0) {
+                            if (written == AudioTrack.ERROR_DEAD_OBJECT) throw IllegalStateException("AudioTrack encerrado")
+                            break
+                        }
+                        offset += written
+                    }
+                }
+            }
             codec.releaseOutputBuffer(o, false)
         }
     }
 
     fun release() {
-        runCatching { track.stop(); track.release() }
+        runCatching { track.pause(); track.flush(); track.stop(); track.release() }
         runCatching { codec.stop(); codec.release() }
     }
 }

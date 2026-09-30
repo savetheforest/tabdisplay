@@ -2,6 +2,7 @@ package com.tabdisplay
 
 import android.content.Context
 import android.net.wifi.WifiManager
+import android.os.SystemClock
 import org.json.JSONObject
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -9,6 +10,7 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.SocketTimeoutException
 import kotlin.concurrent.thread
+import java.util.concurrent.atomic.AtomicBoolean
 
 private const val BEACON_PORT = 7071
 private const val USB_HOST = "127.0.0.1"
@@ -22,31 +24,37 @@ private const val FORGET_AFTER_MS = 8000L // broadcasts arrive late on Wi-Fi in 
 class Discovery(context: Context, private val onChange: (List<Pc>) -> Unit) {
     /** [id] identifies the PC across IP changes (pairing tokens are stored by it); null for USB. */
     data class Pc(val id: String?, val name: String, val host: String) {
-        val usb get() = host == USB_HOST
+        /** The endpoint is local ADB; it is not proof of a physical cable or USB tethering. */
+        val local get() = host == USB_HOST
     }
 
     // Some Wi-Fi drivers drop broadcast packets in power save unless an app holds this lock.
     private val lock = (context.applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager)
         .createMulticastLock("tabdisplay").apply { setReferenceCounted(false) }
-    private val socket = DatagramSocket(null).apply {
-        reuseAddress = true
-        broadcast = true
-        soTimeout = 1000
-        bind(InetSocketAddress(BEACON_PORT))
-    }
-    private val seen = LinkedHashMap<String, Pair<Pc, Long>>() // by host
+    private val socket: DatagramSocket? = runCatching {
+        DatagramSocket(null).apply {
+            reuseAddress = true
+            broadcast = true
+            soTimeout = 1000
+            bind(InetSocketAddress(BEACON_PORT))
+        }
+    }.getOrNull()
+    private val seen = LinkedHashMap<String, Pair<Pc, Long>>() // endpoint by host
     private var published = emptyList<Pc>()
+    private val started = AtomicBoolean(false)
     @Volatile private var running = true
 
     fun start() {
+        if (!started.compareAndSet(false, true)) return
         lock.acquire()
         thread(name = "discovery") { listen() }
         thread(name = "usb-probe") { probeUsb() }
     }
 
     fun stop() {
+        if (!started.compareAndSet(true, false)) return
         running = false
-        socket.close()
+        socket?.close()
         lock.release()
     }
 
@@ -55,11 +63,13 @@ class Discovery(context: Context, private val onChange: (List<Pc>) -> Unit) {
         while (running) {
             try {
                 val packet = DatagramPacket(buf, buf.size)
-                socket.receive(packet)
+                socket?.receive(packet) ?: return
                 val text = String(packet.data, 0, packet.length)
                 if (text.startsWith("TABDISPLAY {")) {
                     val info = runCatching { JSONObject(text.removePrefix("TABDISPLAY ")) }.getOrNull() ?: continue
-                    see(Pc(info.optString("id"), info.optString("name", "PC"), packet.address.hostAddress ?: continue))
+                    val id = info.optString("id").takeIf { it.isNotBlank() && it.length <= 128 } ?: continue
+                    val name = info.optString("name", "PC").takeIf { it.isNotBlank() && it.length <= 128 } ?: "PC"
+                    see(Pc(id, name, packet.address.hostAddress ?: continue))
                 }
             } catch (_: SocketTimeoutException) {
             } catch (_: Exception) {
@@ -73,23 +83,23 @@ class Discovery(context: Context, private val onChange: (List<Pc>) -> Unit) {
     private fun probeUsb() {
         while (running) {
             val reachable = runCatching { Socket().use { it.connect(InetSocketAddress(USB_HOST, 7070), 300) } }.isSuccess
-            if (reachable) see(Pc(null, "USB", USB_HOST))
+            if (reachable) see(Pc(null, "Conexão local", USB_HOST))
             publish()
-            Thread.sleep(2000)
+            runCatching { Thread.sleep(2000) }
         }
     }
 
-    private fun see(pc: Pc) = synchronized(seen) { seen[pc.host] = pc to System.currentTimeMillis() }
+    private fun see(pc: Pc) = synchronized(seen) { seen[pc.host] = pc to SystemClock.elapsedRealtime() }
 
     private fun publish() {
         val changed = synchronized(seen) {
-            val now = System.currentTimeMillis()
-            seen.values.removeAll { now - it.second > FORGET_AFTER_MS }
-            val list = seen.values.map { it.first }.sortedBy { !it.usb }
+            val now = SystemClock.elapsedRealtime()
+            seen.values.removeAll { SystemClock.elapsedRealtime() - it.second > FORGET_AFTER_MS }
+            val list = seen.values.map { it.first }.sortedBy { !it.local }
             if (list == published) null else list.also { published = it }
         }
         if (changed != null && running) {
-            Crumbs.add("discovery", "pcs visible: ${changed.size} (usb: ${changed.count { it.usb }})") // counts only, no names or addresses
+            Crumbs.add("discovery", "pcs visible: ${changed.size} (local: ${changed.count { it.local }})") // counts only, no names or addresses
             onChange(changed)
         }
     }

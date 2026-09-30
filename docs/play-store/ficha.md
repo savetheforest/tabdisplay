@@ -29,7 +29,7 @@ Transforme o seu tablet Android em um segundo monitor para o PC (Windows) ou o M
 • Estender ou espelhar: use o tablet como uma tela a mais ou repita a tela do computador.
 • Toque e caneta de verdade: gestos, rolagem com dois dedos e pressão da caneta funcionam no computador.
 • Som do PC no tablet, com botão de silenciar só no tablet.
-• Por cabo USB ou Wi‑Fi. Pelo cabo não precisa de código; pelo Wi‑Fi o pareamento é feito uma vez, com um código de 6 dígitos.
+• Por ADB local, rede USB ou Wi‑Fi. A primeira conexão usa um código de 6 dígitos; depois o tablet guarda o pareamento por PC.
 • Qualidade que se ajusta: Desempenho, Equilibrado, Qualidade ou Automático (baixa sozinho se a rede piorar). Dá para trocar direto pelo menu do tablet.
 • Tudo local e criptografado (TLS): a imagem não passa por servidor nenhum e não coletamos dados.
 • A sessão continua com a tela bloqueada ou com outro app na frente.
@@ -48,7 +48,7 @@ Para usar, instale também o TabDisplay no computador (Windows 10/11 ou macOS 14
 |---|---|
 | `INTERNET` | Conectar ao PC do próprio usuário (rede local ou USB). |
 | `CHANGE_WIFI_MULTICAST_STATE` | Receber o aviso de presença do PC na rede local. |
-| `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_DATA_SYNC` | Manter a sessão com o PC ativa (dados de tela/áudio chegando) com a tela bloqueada ou outro app aberto. Tipo de serviço: *dataSync*. |
+| `FOREGROUND_SERVICE` + `FOREGROUND_SERVICE_CONNECTED_DEVICE` | Manter a sessão local com o PC ativa com a tela bloqueada ou outro app aberto. Tipo de serviço declarado: *connectedDevice*. |
 | `WAKE_LOCK` | Impedir que a CPU durma durante uma sessão ativa. |
 | `POST_NOTIFICATIONS` | Mostrar a notificação obrigatória do serviço em primeiro plano. |
 

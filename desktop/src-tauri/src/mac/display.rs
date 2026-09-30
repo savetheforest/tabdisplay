@@ -12,7 +12,13 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 
 /// Offered in the UI (the tablet's own size is always available too).
-pub const PRESETS: &[(u32, u32)] = &[(1280, 800), (1920, 1200), (2560, 1600), (1920, 1080), (2560, 1440)];
+pub const PRESETS: &[(u32, u32)] = &[
+    (1280, 800),
+    (1920, 1200),
+    (2560, 1600),
+    (1920, 1080),
+    (2560, 1440),
+];
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
@@ -46,7 +52,12 @@ unsafe extern "C" {
     fn CGBeginDisplayConfiguration(config: *mut *mut c_void) -> i32;
     fn CGConfigureDisplayOrigin(config: *mut c_void, display: u32, x: i32, y: i32) -> i32;
     fn CGCompleteDisplayConfiguration(config: *mut c_void, option: u32) -> i32;
-    fn CGConfigureDisplayWithDisplayMode(config: *mut c_void, display: u32, mode: *const c_void, options: *const c_void) -> i32;
+    fn CGConfigureDisplayWithDisplayMode(
+        config: *mut c_void,
+        display: u32,
+        mode: *const c_void,
+        options: *const c_void,
+    ) -> i32;
     fn CGDisplayCopyAllDisplayModes(display: u32, options: *const c_void) -> *const c_void;
     fn CGDisplayModeGetWidth(mode: *const c_void) -> usize;
     fn CGDisplayModeGetPixelWidth(mode: *const c_void) -> usize;
@@ -59,7 +70,14 @@ unsafe extern "C" {
     static kCFBooleanTrue: *const c_void;
     static kCFTypeDictionaryKeyCallBacks: c_void;
     static kCFTypeDictionaryValueCallBacks: c_void;
-    fn CFDictionaryCreate(allocator: *const c_void, keys: *const *const c_void, values: *const *const c_void, count: isize, key_cb: *const c_void, value_cb: *const c_void) -> *const c_void;
+    fn CFDictionaryCreate(
+        allocator: *const c_void,
+        keys: *const *const c_void,
+        values: *const *const c_void,
+        count: isize,
+        key_cb: *const c_void,
+        value_cb: *const c_void,
+    ) -> *const c_void;
     fn CFArrayGetCount(array: *const c_void) -> isize;
     fn CFArrayGetValueAtIndex(array: *const c_void, index: isize) -> *const c_void;
     fn CFRelease(cf: *const c_void);
@@ -82,9 +100,13 @@ unsafe fn with_retina_mode(id: u32, pw: u32, w: u32, h: u32, f: impl FnOnce(*con
         if modes.is_null() {
             return;
         }
-        let found = (0..CFArrayGetCount(modes)).map(|i| CFArrayGetValueAtIndex(modes, i)).find(|&m| {
-            CGDisplayModeGetWidth(m) == pw as usize && CGDisplayModeGetPixelWidth(m) == w as usize && CGDisplayModeGetPixelHeight(m) == h as usize
-        });
+        let found = (0..CFArrayGetCount(modes))
+            .map(|i| CFArrayGetValueAtIndex(modes, i))
+            .find(|&m| {
+                CGDisplayModeGetWidth(m) == pw as usize
+                    && CGDisplayModeGetPixelWidth(m) == w as usize
+                    && CGDisplayModeGetPixelHeight(m) == h as usize
+            });
         if let Some(mode) = found {
             f(mode);
         }
@@ -136,7 +158,8 @@ pub fn find_devices() -> Vec<String> {
 }
 
 fn class(name: &CStr) -> io::Result<&'static AnyClass> {
-    AnyClass::get(name).ok_or_else(|| io::Error::other("monitor virtual indisponível nesta versão do macOS"))
+    AnyClass::get(name)
+        .ok_or_else(|| io::Error::other("monitor virtual indisponível nesta versão do macOS"))
 }
 
 unsafe fn nsstring(s: &CStr) -> io::Result<*mut AnyObject> {
@@ -167,7 +190,12 @@ pub fn attach(w: u32, h: u32, hz: u32, pos: Position) -> io::Result<VirtualDispl
         }
         let id: u32 = msg_send![display, displayID];
         CURRENT.lock().unwrap().push(id);
-        let mut vd = VirtualDisplay { device: id.to_string(), id, display, applied: None };
+        let mut vd = VirtualDisplay {
+            device: id.to_string(),
+            id,
+            display,
+            applied: None,
+        };
         vd.configure(w, h, hz, pos)?;
         Ok(vd)
     }
@@ -206,17 +234,31 @@ impl VirtualDisplay {
             }
             if std::env::var_os("TABDISPLAY_DEBUG").is_some() {
                 let b = CGDisplayBounds(self.id);
-                eprintln!("virtual display {} asked {w}x{h}@{hz} px, bounds {}x{} pt, pixels {:?}", self.id, b.size.width, b.size.height, super::capture::pixel_size(self.id));
+                eprintln!(
+                    "virtual display {} asked {w}x{h}@{hz} px, bounds {}x{} pt, pixels {:?}",
+                    self.id,
+                    b.size.width,
+                    b.size.height,
+                    super::capture::pixel_size(self.id)
+                );
             }
             // Next to the main display and the other tablets' monitors.
             let (mut l, mut t, mut r, mut b) = {
                 let m = CGDisplayBounds(CGMainDisplayID());
-                (m.origin.x as i32, m.origin.y as i32, (m.origin.x + m.size.width) as i32, (m.origin.y + m.size.height) as i32)
+                (
+                    m.origin.x as i32,
+                    m.origin.y as i32,
+                    (m.origin.x + m.size.width) as i32,
+                    (m.origin.y + m.size.height) as i32,
+                )
             };
             for &other in CURRENT.lock().unwrap().iter().filter(|&&o| o != self.id) {
                 let o = CGDisplayBounds(other);
                 (l, t) = (l.min(o.origin.x as i32), t.min(o.origin.y as i32));
-                (r, b) = (r.max((o.origin.x + o.size.width) as i32), b.max((o.origin.y + o.size.height) as i32));
+                (r, b) = (
+                    r.max((o.origin.x + o.size.width) as i32),
+                    b.max((o.origin.y + o.size.height) as i32),
+                );
             }
             let (x, y) = match pos {
                 Position::Right => (r, 0),
@@ -234,7 +276,10 @@ impl VirtualDisplay {
                 CGCompleteDisplayConfiguration(config, 1); // kCGConfigureForSession
             }
             if std::env::var_os("TABDISPLAY_DEBUG").is_some() {
-                eprintln!("after retina switch: pixels {:?}", super::capture::pixel_size(self.id));
+                eprintln!(
+                    "after retina switch: pixels {:?}",
+                    super::capture::pixel_size(self.id)
+                );
             }
         }
         self.applied = Some((w, h, hz, pos));

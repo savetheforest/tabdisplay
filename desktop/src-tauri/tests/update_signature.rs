@@ -25,8 +25,16 @@ fn serve(version: &str, signature_b64: String, file: &'static [u8]) -> String {
             let mut buf = [0u8; 2048];
             let n = sock.read(&mut buf).unwrap_or(0);
             let request = String::from_utf8_lossy(&buf[..n]).to_string();
-            let body: Vec<u8> = if request.contains("latest.json") { manifest.clone().into_bytes() } else { file.to_vec() };
-            let _ = write!(sock, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+            let body: Vec<u8> = if request.contains("latest.json") {
+                manifest.clone().into_bytes()
+            } else {
+                file.to_vec()
+            };
+            let _ = write!(
+                sock,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
             let _ = sock.write_all(&body);
         }
     });
@@ -36,8 +44,18 @@ fn serve(version: &str, signature_b64: String, file: &'static [u8]) -> String {
 /// (public key as the config wants it, signature of `data` as the manifest wants it)
 fn sign(data: &[u8]) -> (String, String) {
     let pair = minisign::KeyPair::generate_unencrypted_keypair().unwrap();
-    let signature = minisign::sign(Some(&pair.pk), &pair.sk, Cursor::new(data), Some("trusted"), Some("untrusted")).unwrap();
-    (STANDARD.encode(pair.pk.to_box().unwrap().to_string()), STANDARD.encode(signature.to_string()))
+    let signature = minisign::sign(
+        Some(&pair.pk),
+        &pair.sk,
+        Cursor::new(data),
+        Some("trusted"),
+        Some("untrusted"),
+    )
+    .unwrap();
+    (
+        STANDARD.encode(pair.pk.to_box().unwrap().to_string()),
+        STANDARD.encode(signature.to_string()),
+    )
 }
 
 /// The installer file the server hands out is `served`, its signature is `signature` and the app trusts `pubkey`.
@@ -48,23 +66,46 @@ fn download(pubkey: String, signature: String, served: &'static [u8]) -> Result<
         "updater".into(),
         json!({ "pubkey": pubkey, "endpoints": [endpoint], "dangerousInsecureTransportProtocol": true }),
     );
-    let app = tauri::test::mock_builder().plugin(tauri_plugin_updater::Builder::new().build()).build(context).unwrap();
+    let app = tauri::test::mock_builder()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .build(context)
+        .unwrap();
     tauri::async_runtime::block_on(async {
-        let update = app.handle().updater().map_err(|e| e.to_string())?.check().await.map_err(|e| e.to_string())?.ok_or("no update offered")?;
-        update.download(|_, _| {}, || {}).await.map_err(|e| e.to_string())
+        let update = app
+            .handle()
+            .updater()
+            .map_err(|e| e.to_string())?
+            .check()
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or("no update offered")?;
+        update
+            .download(|_, _| {}, || {})
+            .await
+            .map_err(|e| e.to_string())
     })
 }
 
 #[test]
 fn installs_only_what_the_release_key_signed() {
     let (pubkey, signature) = sign(PAYLOAD);
-    assert_eq!(download(pubkey.clone(), signature.clone(), PAYLOAD).unwrap(), PAYLOAD);
+    assert_eq!(
+        download(pubkey.clone(), signature.clone(), PAYLOAD).unwrap(),
+        PAYLOAD
+    );
 
     // The file was swapped after signing.
-    let tampered = download(pubkey.clone(), signature, b"pretend this is malware..........");
+    let tampered = download(
+        pubkey.clone(),
+        signature,
+        b"pretend this is malware..........",
+    );
     assert!(tampered.is_err(), "a tampered installer must be rejected");
 
     // Signed by some other key: rejected too.
     let (_, foreign_signature) = sign(PAYLOAD);
-    assert!(download(pubkey, foreign_signature, PAYLOAD).is_err(), "a signature from another key must be rejected");
+    assert!(
+        download(pubkey, foreign_signature, PAYLOAD).is_err(),
+        "a signature from another key must be rejected"
+    );
 }

@@ -39,13 +39,41 @@ pub fn init() -> Option<ClientInitGuard> {
 
 /// Something went wrong that we can recover from (capture lost, encoder fell back...): log it and report it.
 pub fn warn(message: String) {
-    eprintln!("{message}");
-    sentry::capture_message(&message, Level::Warning);
+    let safe = sanitize(&message);
+    eprintln!("{safe}");
+    sentry::capture_message(&safe, Level::Warning);
 }
 
 /// Context for whatever gets reported next (connection steps and the like). Keep it free of names and addresses.
 pub fn crumb(category: &str, message: &str) {
-    sentry::add_breadcrumb(Breadcrumb { category: Some(category.into()), message: Some(message.into()), ..Default::default() });
+    sentry::add_breadcrumb(Breadcrumb {
+        category: Some(category.into()),
+        message: Some(sanitize(message).into()),
+        ..Default::default()
+    });
+}
+
+/// Keep diagnostics useful while removing common host-specific values before
+/// they reach either local logs or an opt-in Sentry endpoint.
+fn sanitize(message: &str) -> String {
+    message
+        .split_whitespace()
+        .map(|word| {
+            let address = word.split('.').count() == 4
+                && word.split('.').all(|part| {
+                    part.trim_matches(|c: char| !c.is_ascii_digit())
+                        .parse::<u8>()
+                        .is_ok()
+                });
+            if address || word.contains(":\\") || word.starts_with("\\\\") || word.starts_with("//")
+            {
+                "<redacted>"
+            } else {
+                word
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[cfg(test)]
@@ -59,7 +87,10 @@ mod tests {
     fn panics_are_reported() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
-        std::env::set_var("TABDISPLAY_SENTRY_DSN", format!("http://key@127.0.0.1:{port}/1"));
+        std::env::set_var(
+            "TABDISPLAY_SENTRY_DSN",
+            format!("http://key@127.0.0.1:{port}/1"),
+        );
         let server = std::thread::spawn(move || {
             listener.set_nonblocking(false).unwrap();
             let (mut sock, _) = listener.accept().unwrap();
@@ -81,7 +112,20 @@ mod tests {
         let _guard = super::init().expect("DSN is set");
         let _ = std::thread::spawn(|| panic!("boom from a background thread")).join();
         let received = server.join().unwrap();
-        assert!(received.contains("boom from a background thread"), "{received}");
-        assert!(!received.contains("server_name"), "host name must not be sent");
+        assert!(
+            received.contains("boom from a background thread"),
+            "{received}"
+        );
+        assert!(
+            !received.contains("server_name"),
+            "host name must not be sent"
+        );
+    }
+
+    #[test]
+    fn sanitizes_host_values_from_diagnostics() {
+        let safe = super::sanitize(r"capture C:\Users\Alice\secret.txt 192.168.1.42");
+        assert!(!safe.contains("Alice") && !safe.contains("192.168.1.42"));
+        assert!(safe.contains("<redacted>"));
     }
 }

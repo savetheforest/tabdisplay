@@ -33,7 +33,9 @@ pub fn cli(arg: &str) -> Option<i32> {
 
 /// Resources ship next to the executable (Tauri puts bundle resources in the install dir).
 pub fn resource(name: &str) -> PathBuf {
-    std::env::current_exe().unwrap_or_default().with_file_name(name)
+    std::env::current_exe()
+        .unwrap_or_default()
+        .with_file_name(name)
 }
 
 /// Makes sure the driver is installed with our mode list and running with it.
@@ -81,7 +83,12 @@ pub fn set_enabled(on: bool) -> io::Result<()> {
             Scope: DICS_FLAG_GLOBAL,
             HwProfile: 0,
         };
-        SetupDiSetClassInstallParamsW(set, Some(dev), Some(&params.ClassInstallHeader), size_of::<SP_PROPCHANGE_PARAMS>() as u32)?;
+        SetupDiSetClassInstallParamsW(
+            set,
+            Some(dev),
+            Some(&params.ClassInstallHeader),
+            size_of::<SP_PROPCHANGE_PARAMS>() as u32,
+        )?;
         SetupDiCallClassInstaller(DIF_PROPERTYCHANGE, set, Some(dev))
     })
 }
@@ -95,16 +102,37 @@ fn create_device() -> Result<()> {
         let mut class = [0u16; 64];
         SetupDiGetINFClassW(&inf, &mut guid, &mut class, None)?;
         let set = SetupDiCreateDeviceInfoList(Some(&guid), None)?;
-        let mut dev = SP_DEVINFO_DATA { cbSize: size_of::<SP_DEVINFO_DATA>() as u32, ..Default::default() };
+        let mut dev = SP_DEVINFO_DATA {
+            cbSize: size_of::<SP_DEVINFO_DATA>() as u32,
+            ..Default::default()
+        };
         let created = (|| {
-            SetupDiCreateDeviceInfoW(set, PCWSTR(class.as_ptr()), &guid, PCWSTR::null(), None, DICD_GENERATE_ID, Some(&mut dev))?;
-            let hwid: Vec<u8> = HWID.encode_utf16().chain([0, 0]).flat_map(u16::to_le_bytes).collect(); // REG_MULTI_SZ
+            SetupDiCreateDeviceInfoW(
+                set,
+                PCWSTR(class.as_ptr()),
+                &guid,
+                PCWSTR::null(),
+                None,
+                DICD_GENERATE_ID,
+                Some(&mut dev),
+            )?;
+            let hwid: Vec<u8> = HWID
+                .encode_utf16()
+                .chain([0, 0])
+                .flat_map(u16::to_le_bytes)
+                .collect(); // REG_MULTI_SZ
             SetupDiSetDeviceRegistryPropertyW(set, &mut dev, SPDRP_HARDWAREID, Some(&hwid))?;
             SetupDiCallClassInstaller(DIF_REGISTERDEVICE, set, Some(&dev))
         })();
         let _ = SetupDiDestroyDeviceInfoList(set);
         created?;
-        UpdateDriverForPlugAndPlayDevicesW(None, &HSTRING::from(HWID), &inf, INSTALLFLAG_FORCE, None)
+        UpdateDriverForPlugAndPlayDevicesW(
+            None,
+            &HSTRING::from(HWID),
+            &inf,
+            INSTALLFLAG_FORCE,
+            None,
+        )
     }
 }
 
@@ -120,17 +148,34 @@ fn installed() -> io::Result<bool> {
 
 fn for_each_device(mut f: impl FnMut(HDEVINFO, &SP_DEVINFO_DATA) -> Result<()>) -> io::Result<()> {
     unsafe {
-        let set = SetupDiGetClassDevsW(None, PCWSTR::null(), None, DIGCF_ALLCLASSES).map_err(io::Error::other)?;
+        let set = SetupDiGetClassDevsW(None, PCWSTR::null(), None, DIGCF_ALLCLASSES)
+            .map_err(io::Error::other)?;
         let mut result = Ok(());
-        let mut dev = SP_DEVINFO_DATA { cbSize: size_of::<SP_DEVINFO_DATA>() as u32, ..Default::default() };
+        let mut dev = SP_DEVINFO_DATA {
+            cbSize: size_of::<SP_DEVINFO_DATA>() as u32,
+            ..Default::default()
+        };
         let mut i = 0;
         while result.is_ok() && SetupDiEnumDeviceInfo(set, i, &mut dev).is_ok() {
             i += 1;
             let mut buf = [0u8; 1024];
-            if SetupDiGetDeviceRegistryPropertyW(set, &dev, SPDRP_HARDWAREID, None, Some(&mut buf), None).is_err() {
+            if SetupDiGetDeviceRegistryPropertyW(
+                set,
+                &dev,
+                SPDRP_HARDWAREID,
+                None,
+                Some(&mut buf),
+                None,
+            )
+            .is_err()
+            {
                 continue;
             }
-            let ids = String::from_utf16_lossy(&buf.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect::<Vec<_>>());
+            let ids = String::from_utf16_lossy(
+                &buf.chunks_exact(2)
+                    .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                    .collect::<Vec<_>>(),
+            );
             if ids.split('\0').any(|id| id.eq_ignore_ascii_case(HWID)) {
                 result = f(set, &dev).map_err(io::Error::other);
             }

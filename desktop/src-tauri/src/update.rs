@@ -11,8 +11,15 @@ static PENDING: Mutex<Option<Update>> = Mutex::new(None);
 /// `null` when this is the latest version, else `{version, notes}`.
 #[tauri::command]
 pub async fn check_update(app: tauri::AppHandle) -> Result<Value, String> {
-    let found = app.updater().map_err(|e| e.to_string())?.check().await.map_err(|e| e.to_string())?;
-    let info = found.as_ref().map(|u| json!({ "version": u.version, "notes": u.body }));
+    let found = app
+        .updater()
+        .map_err(|e| e.to_string())?
+        .check()
+        .await
+        .map_err(|e| e.to_string())?;
+    let info = found
+        .as_ref()
+        .map(|u| json!({ "version": u.version, "notes": u.body }));
     *PENDING.lock().unwrap() = found;
     Ok(info.unwrap_or(Value::Null))
 }
@@ -20,7 +27,14 @@ pub async fn check_update(app: tauri::AppHandle) -> Result<Value, String> {
 /// Downloads, verifies and installs the update `check_update` found, then restarts the app.
 #[tauri::command]
 pub async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
-    let update = PENDING.lock().unwrap().take().ok_or("Nenhuma atualização encontrada: verifique de novo.")?;
-    update.download_and_install(|_, _| {}, || {}).await.map_err(|e| e.to_string())?;
+    let update = PENDING
+        .lock()
+        .unwrap()
+        .take()
+        .ok_or("Nenhuma atualização encontrada: verifique de novo.")?;
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|e| e.to_string())?;
     app.restart()
 }

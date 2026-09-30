@@ -26,8 +26,14 @@ impl MfEncoder {
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
             MFStartup(MF_VERSION, MFSTARTUP_LITE)?;
 
-            let input = MFT_REGISTER_TYPE_INFO { guidMajorType: MFMediaType_Video, guidSubtype: MFVideoFormat_NV12 };
-            let output = MFT_REGISTER_TYPE_INFO { guidMajorType: MFMediaType_Video, guidSubtype: MFVideoFormat_H264 };
+            let input = MFT_REGISTER_TYPE_INFO {
+                guidMajorType: MFMediaType_Video,
+                guidSubtype: MFVideoFormat_NV12,
+            };
+            let output = MFT_REGISTER_TYPE_INFO {
+                guidMajorType: MFMediaType_Video,
+                guidSubtype: MFVideoFormat_H264,
+            };
             let (mut list, mut n) = (std::ptr::null_mut(), 0);
             MFTEnumEx(
                 MFT_CATEGORY_VIDEO_ENCODER,
@@ -52,7 +58,10 @@ impl MfEncoder {
             // Best effort: not every vendor supports every knob.
             if let Ok(codec) = mft.cast::<ICodecAPI>() {
                 let _ = codec.SetValue(&CODECAPI_AVLowLatencyMode, &VARIANT::from(true));
-                let _ = codec.SetValue(&CODECAPI_AVEncCommonRateControlMode, &VARIANT::from(eAVEncCommonRateControlMode_CBR.0 as u32));
+                let _ = codec.SetValue(
+                    &CODECAPI_AVEncCommonRateControlMode,
+                    &VARIANT::from(eAVEncCommonRateControlMode_CBR.0 as u32),
+                );
                 // Keyframe every 5s: heals a stalled tablet decoder (TCP itself never drops a frame in
                 // transit), and a full frame is much heavier than a delta one, so spacing them out cuts Mbps.
                 let _ = codec.SetValue(&CODECAPI_AVEncMPVGOPSize, &VARIANT::from(fps * 5));
@@ -78,7 +87,9 @@ impl MfEncoder {
             inp.SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
             mft.SetInputType(0, &inp, 0)?;
 
-            let provides_samples = mft.GetOutputStreamInfo(0)?.dwFlags & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.0 as u32 != 0;
+            let provides_samples = mft.GetOutputStreamInfo(0)?.dwFlags
+                & MFT_OUTPUT_STREAM_PROVIDES_SAMPLES.0 as u32
+                != 0;
             mft.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
             mft.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
 
@@ -119,7 +130,11 @@ impl MfEncoder {
 
     /// Handles one encoder event. Returns false if `wait` is false and nothing was pending.
     unsafe fn pump(&mut self, wait: bool, out: &mut Vec<u8>) -> Result<bool> {
-        let flags = if wait { MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS(0) } else { MF_EVENT_FLAG_NO_WAIT };
+        let flags = if wait {
+            MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS(0)
+        } else {
+            MF_EVENT_FLAG_NO_WAIT
+        };
         let event = match self.events.GetEvent(flags) {
             Err(e) if e.code() == MF_E_NO_EVENTS_AVAILABLE => return Ok(false),
             r => r?,
@@ -140,7 +155,11 @@ impl MfEncoder {
             s.AddBuffer(&MFCreateMemoryBuffer((self.w * self.h) as u32)?)?;
             Some(s)
         };
-        let mut buf = [MFT_OUTPUT_DATA_BUFFER { dwStreamID: 0, pSample: std::mem::ManuallyDrop::new(sample), ..Default::default() }];
+        let mut buf = [MFT_OUTPUT_DATA_BUFFER {
+            dwStreamID: 0,
+            pSample: std::mem::ManuallyDrop::new(sample),
+            ..Default::default()
+        }];
         let mut status = 0;
         let r = self.mft.ProcessOutput(0, &mut buf, &mut status);
         let [buf] = buf;
@@ -149,7 +168,9 @@ impl MfEncoder {
         if let Err(e) = r {
             if e.code() == MF_E_TRANSFORM_STREAM_CHANGE {
                 // Encoder renegotiated its output type (some do on the first frame): accept it.
-                return self.mft.SetOutputType(0, &self.mft.GetOutputAvailableType(0, 0)?, 0);
+                return self
+                    .mft
+                    .SetOutputType(0, &self.mft.GetOutputAvailableType(0, 0)?, 0);
             }
             return Err(e);
         }
@@ -163,7 +184,8 @@ impl MfEncoder {
     }
 
     fn nv12_sample(&mut self, bgra: &[u8]) -> Result<IMFSample> {
-        self.yuv.read_bgra8(BgraSliceU8::new(bgra, (self.w, self.h)));
+        self.yuv
+            .read_bgra8(BgraSliceU8::new(bgra, (self.w, self.h)));
         let (w, h) = (self.w, self.h);
         let (ys, us, vs) = self.yuv.strides();
         let len = w * h * 3 / 2;

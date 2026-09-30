@@ -96,6 +96,7 @@
           <div class="row">
             <svg class="icon"><use href="#i-usb" /></svg>
             <div class="label"><span class="title">Cabo USB</span><span class="desc" id="usb-desc"></span></div>
+            <select id="adb-device" aria-label="Aparelho ADB"></select>
             <button class="btn" id="install">Instalar app no tablet</button>
           </div>
         </div>
@@ -206,8 +207,9 @@
       <!-- Aparelhos -->
       <section id="page-devices" hidden>
         <h1>Aparelhos</h1>
-        <p class="muted">Tablets que já parearam pelo Wi‑Fi conectam sem código. Pelo cabo USB não é preciso parear.</p>
+        <p class="muted">Tablets que já parearam conectam sem novo código. A conexão local pelo ADB e a rede USB também pedem pareamento na primeira vez.</p>
         <div class="card rows" id="paired"></div>
+        <p class="muted small" id="paired-msg" role="status"></p>
       </section>
 
       <!-- Avançado -->
@@ -240,7 +242,36 @@
             <div class="label"><span class="title">Guia de primeiro uso</span><span class="desc">Instalar o app no tablet, permissões e como conectar</span></div>
             <button class="btn" id="show-guide">Ver instruções de novo</button>
           </div>
+          <div class="row">
+            <svg class="icon"><use href="#i-quality" /></svg>
+            <div class="label"><span class="title">Diagnóstico</span><span class="desc">Exporta somente métricas agregadas da sessão, sem nome, IP, token ou serial</span></div>
+            <button class="btn" id="export-metrics">Exportar métricas</button>
+          </div>
+          <div class="row">
+            <svg class="icon"><use href="#i-touch" /></svg>
+            <div class="label"><span class="title">Texto entre PC e tablet</span><span class="desc">Ação manual, limitada a 16 KiB; não cola nem sincroniza automaticamente</span></div>
+            <button class="btn" id="send-clipboard" disabled>Enviar texto copiado</button>
+          </div>
+          <div class="row">
+            <svg class="icon"><use href="#i-position" /></svg>
+            <div class="label"><span class="title">Layout por tablet</span><span class="desc">Salva a tela atual por aparelho; aplicar sempre mostra ajustes antes de alterar algo</span></div>
+            <select id="layout-session" aria-label="Tablet do layout"></select>
+            <button class="btn" id="save-layout" disabled>Salvar atual</button>
+            <button class="btn" id="plan-layout" disabled>Verificar</button>
+            <button class="btn" id="apply-layout" disabled>Aplicar</button>
+          </div>
+          <div class="row">
+            <svg class="icon"><use href="#i-display" /></svg>
+            <div class="label"><span class="title">Gravação local</span><span class="desc">Ação manual; H.264/Opus em arquivos Matroska, sem iniciar após reconexão</span></div>
+            <input id="recording-path" type="text" placeholder="Caminho do arquivo .mkv" aria-label="Destino da gravação" />
+            <button class="btn" id="record-start" disabled>Iniciar</button>
+            <button class="btn" id="record-stop" disabled>Parar</button>
+          </div>
         </div>
+        <p class="muted small" id="metrics-msg"></p>
+        <p class="muted small" id="clipboard-msg"></p>
+        <p class="muted small" id="layout-msg"></p>
+        <p class="muted small" id="recording-msg" role="status"></p>
         <p class="muted small">Fechar a janela deixa o TabDisplay na bandeja. Para sair de vez, use “Sair” no ícone da bandeja.</p>
       </section>
     </main>
@@ -271,6 +302,14 @@
       <div class="code" id="pair-code">······</div>
       <p class="muted small">Digite este código no tablet. Ele vale por 2 minutos e só é pedido na primeira vez.</p>
       <div class="actions"><button class="btn" id="pair-close">Fechar</button></div>
+    </dialog>
+
+    <dialog id="text-dialog">
+      <h3>Texto recebido do tablet</h3>
+      <div class="muted" id="text-sender"></div>
+      <p id="received-text" style="white-space: pre-wrap; overflow-wrap: anywhere;"></p>
+      <p class="muted small">Copiar coloca o texto na área de transferência. Nada é colado automaticamente.</p>
+      <div class="actions"><button class="btn" id="text-discard">Descartar</button><button class="btn" id="text-copy">Copiar</button></div>
     </dialog>
   </body>
 </html>

@@ -19,13 +19,21 @@ const SETTINGS: &str = r"C:\VirtualDisplayDriver\vdd_settings.xml";
 /// Substring of the virtual monitor's device interface path.
 const MONITOR_ID: &str = "MTT1337";
 /// Offered in the UI; written to the driver in both orientations.
-pub const PRESETS: &[(u32, u32)] = &[(1280, 800), (1920, 1200), (2560, 1600), (1920, 1080), (2560, 1440)];
+pub const PRESETS: &[(u32, u32)] = &[
+    (1280, 800),
+    (1920, 1200),
+    (2560, 1600),
+    (1920, 1080),
+    (2560, 1440),
+];
 /// Virtual monitors the driver is asked to offer: one per tablet that can be connected at once.
 pub const MAX_TABLETS: usize = 2;
 /// GDI names of the virtual monitors sessions currently use, so two sessions never share one.
 static CLAIMED: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// With more modes than about this (resolutions x refresh rates) the driver plugs in no monitor at all.
 const MAX_REFRESH: u32 = 120;
+/// The VDD becomes unstable with an unbounded resolution x refresh list.
+const MAX_MODES: usize = 24;
 
 /// The attached virtual monitor. Dropping it detaches the monitor, then releases the service lease,
 /// which unplugs it.
@@ -36,16 +44,28 @@ pub struct VirtualDisplay {
     /// What `configure` last applied: repeating it would make Windows re-set the mode, which drops every other
     /// session's screen capture (ACCESS_LOST) and starts a rebuild ping-pong between tablets.
     applied: Option<(u32, u32, u32, Position)>,
+    effective_hz: Option<u32>,
 }
 
 impl Drop for VirtualDisplay {
     fn drop(&mut self) {
+        let detach = apply(
+            &self.device,
+            DEVMODEW {
+                dmSize: size_of::<DEVMODEW>() as u16,
+                dmFields: DM_POSITION | DM_PELSWIDTH | DM_PELSHEIGHT, // all zero = detach
+                ..Default::default()
+            },
+        );
+        if detach != DISP_CHANGE_SUCCESSFUL {
+            crate::telemetry::warn(format!(
+                "não foi possível destacar o monitor virtual {}: {detach:?}",
+                self.device
+            ));
+        }
+        // Do not let another session claim the name until the detach/global apply
+        // has completed; this avoids a desclaim/attach race during rebuild.
         CLAIMED.lock().unwrap().retain(|d| d != &self.device);
-        let _ = apply(&self.device, DEVMODEW {
-            dmSize: size_of::<DEVMODEW>() as u16,
-            dmFields: DM_POSITION | DM_PELSWIDTH | DM_PELSHEIGHT, // all zero = detach
-            ..Default::default()
-        });
     }
 }
 
@@ -66,7 +86,9 @@ fn entry(w: u32, h: u32) -> String {
 /// for the driver. Returns true if the file changed; the driver only sees it after it (re)starts.
 /// Needs write access to the driver folder: the service and the installer call this, not the app.
 pub fn ensure_modes(extra: &[(u32, u32)]) -> io::Result<bool> {
-    let Ok(xml) = fs::read_to_string(SETTINGS) else { return Ok(false) };
+    let Ok(xml) = fs::read_to_string(SETTINGS) else {
+        return Ok(false);
+    };
     let new = with_modes(&xml, extra)?;
     if new == xml {
         return Ok(false);
@@ -76,25 +98,62 @@ pub fn ensure_modes(extra: &[(u32, u32)]) -> io::Result<bool> {
 }
 
 fn with_modes(xml: &str, extra: &[(u32, u32)]) -> io::Result<String> {
-    let mut xml = with_count(&trim(xml));
+    let mut xml = with_count(&limit_modes(&trim(xml)));
     let mut added = String::new();
+    let mut mode_count = count_modes(&xml);
     for &(w, h) in PRESETS.iter().chain(extra) {
         for e in [entry(w, h), entry(h, w)] {
+            if mode_count >= MAX_MODES {
+                break;
+            }
             if !xml.contains(&e) && !added.contains(&e) {
                 added += &e;
+                mode_count += 1;
             }
         }
     }
-    let i = xml.find("<resolutions>").ok_or_else(|| io::Error::other("vdd_settings.xml sem <resolutions>"))? + "<resolutions>".len();
+    let i = xml
+        .find("<resolutions>")
+        .ok_or_else(|| io::Error::other("vdd_settings.xml sem <resolutions>"))?
+        + "<resolutions>".len();
     xml.insert_str(i, &added);
     Ok(xml)
+}
+
+fn count_modes(xml: &str) -> usize {
+    xml.match_indices("<resolution>").count()
+}
+
+/// Keep the driver's existing entries bounded before adding TabDisplay's
+/// presets. This also bounds files that were enlarged by older versions.
+fn limit_modes(xml: &str) -> String {
+    let mut out = String::with_capacity(xml.len());
+    let mut rest = xml;
+    let mut kept = 0;
+    while let Some(start) = rest.find("<resolution>") {
+        let end = rest[start..]
+            .find("</resolution>")
+            .map_or(rest.len(), |e| start + e + "</resolution>".len());
+        out.push_str(&rest[..start]);
+        if kept < MAX_MODES {
+            out.push_str(&rest[start..end]);
+            kept += 1;
+        }
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Sets how many virtual monitors the driver offers (`<count>`), if the file has that setting.
 fn with_count(xml: &str) -> String {
     let (open, close) = ("<count>", "</count>");
-    let Some(start) = xml.find(open).map(|i| i + open.len()) else { return xml.to_string() };
-    let Some(end) = xml[start..].find(close).map(|i| start + i) else { return xml.to_string() };
+    let Some(start) = xml.find(open).map(|i| i + open.len()) else {
+        return xml.to_string();
+    };
+    let Some(end) = xml[start..].find(close).map(|i| start + i) else {
+        return xml.to_string();
+    };
     format!("{}{}{}", &xml[..start], MAX_TABLETS, &xml[end..])
 }
 
@@ -103,7 +162,9 @@ fn trim(xml: &str) -> String {
     let mut out = String::with_capacity(xml.len());
     let mut rest = xml;
     while let Some(start) = rest.find("<resolution>") {
-        let end = rest[start..].find("</resolution>").map_or(rest.len(), |e| start + e + "</resolution>".len());
+        let end = rest[start..]
+            .find("</resolution>")
+            .map_or(rest.len(), |e| start + e + "</resolution>".len());
         out.push_str(&rest[..start]);
         if !rest[start..end].contains("<refresh_rate>30</refresh_rate>") {
             out.push_str(&rest[start..end]);
@@ -114,8 +175,11 @@ fn trim(xml: &str) -> String {
     out.lines()
         .filter(|l| {
             let l = l.trim();
-            let hz = l.strip_prefix("<g_refresh_rate>").and_then(|v| v.strip_suffix("</g_refresh_rate>"));
-            hz.and_then(|v| v.parse::<u32>().ok()).is_none_or(|hz| hz <= MAX_REFRESH)
+            let hz = l
+                .strip_prefix("<g_refresh_rate>")
+                .and_then(|v| v.strip_suffix("</g_refresh_rate>"));
+            hz.and_then(|v| v.parse::<u32>().ok())
+                .is_none_or(|hz| hz <= MAX_REFRESH)
         })
         .map(|l| format!("{l}\n"))
         .collect()
@@ -124,8 +188,17 @@ fn trim(xml: &str) -> String {
 /// Plugs in (through the service) and attaches the virtual monitor at `w`x`h`@`hz`, next to the primary.
 pub fn attach(w: u32, h: u32, hz: u32, pos: Position) -> io::Result<VirtualDisplay> {
     // Without the service (e.g. a dev build) fall back to a driver that's already enabled.
-    let lease = if service::available() { Some(service::enable(w, h)?) } else { None };
-    let mut display = VirtualDisplay { device: String::new(), lease, applied: None };
+    let lease = if service::available() {
+        Some(service::enable(w, h)?)
+    } else {
+        None
+    };
+    let mut display = VirtualDisplay {
+        device: String::new(),
+        lease,
+        applied: None,
+        effective_hz: None,
+    };
     display.configure(w, h, hz, pos)?;
     Ok(display)
 }
@@ -141,14 +214,15 @@ impl VirtualDisplay {
         self.device = loop {
             match self.pick_device() {
                 Some(d) => break d,
-                None if Instant::now() < deadline && self.lease.is_some() => sleep(Duration::from_millis(200)),
-                None => return Err(io::Error::other("monitor virtual indisponível (serviço do TabDisplay parado ou todos em uso?)")),
+                None if Instant::now() < deadline && self.lease.is_some() => {
+                    sleep(Duration::from_millis(200))
+                }
+                None => return Err(io::Error::other(
+                    "monitor virtual indisponível (serviço do TabDisplay parado ou todos em uso?)",
+                )),
             }
         };
         // Next to everything else on the desktop (other tablets' monitors included), not just the primary.
-        if self.applied == Some((w, h, hz, pos)) && current_size(&self.device) == Some((w, h)) {
-            return Ok(()); // already in this mode
-        }
         let (l, t, r, b) = desktop_bounds_without(&self.device);
         let (x, y) = match pos {
             Position::Right => (r, 0),
@@ -156,6 +230,17 @@ impl VirtualDisplay {
             Position::Above => (0, t - h as i32),
             Position::Below => (0, b),
         };
+        if self.applied == Some((w, h, hz, pos)) {
+            if let Some((actual_w, actual_h, actual_hz, actual_x, actual_y)) =
+                current_mode(&self.device)
+            {
+                if (actual_w, actual_h, actual_x, actual_y) == (w, h, x, y)
+                    && self.effective_hz == Some(actual_hz)
+                {
+                    return Ok(()); // already in this mode, including effective refresh and position
+                }
+            }
+        }
         let mut mode = DEVMODEW {
             dmSize: size_of::<DEVMODEW>() as u16,
             dmPelsWidth: w,
@@ -165,14 +250,32 @@ impl VirtualDisplay {
             ..Default::default()
         };
         mode.Anonymous1.Anonymous2.dmPosition = POINTL { x, y };
-        if apply(&self.device, mode) != DISP_CHANGE_SUCCESSFUL && hz != 60 {
+        if apply(&self.device, mode) != DISP_CHANGE_SUCCESSFUL {
+            if hz == 60 {
+                return Err(io::Error::other(format!(
+                    "modo {w}x{h}@{hz} recusado pelo Windows"
+                )));
+            }
             mode.dmDisplayFrequency = 60; // refresh rate not offered: fall back
-            apply(&self.device, mode);
+            if apply(&self.device, mode) != DISP_CHANGE_SUCCESSFUL {
+                return Err(io::Error::other(format!(
+                    "modo {w}x{h}@{hz} e fallback @60 recusados pelo Windows"
+                )));
+            }
         }
-        if current_size(&self.device) != Some((w, h)) {
-            return Err(io::Error::other(format!("{w}x{h} indisponível no monitor virtual")));
+        let Some((actual_w, actual_h, actual_hz, actual_x, actual_y)) = current_mode(&self.device)
+        else {
+            return Err(io::Error::other(
+                "não foi possível ler o modo efetivo do monitor virtual",
+            ));
+        };
+        if (actual_w, actual_h, actual_x, actual_y) != (w, h, x, y) {
+            return Err(io::Error::other(format!(
+                "modo efetivo divergente: {actual_w}x{actual_h} em ({actual_x},{actual_y})"
+            )));
         }
         self.applied = Some((w, h, hz, pos));
+        self.effective_hz = Some(actual_hz);
         Ok(())
     }
 }
@@ -188,9 +291,17 @@ impl VirtualDisplay {
         }
         claimed.retain(|d| d != &self.device); // stale name
         self.applied = None;
+        self.effective_hz = None;
         let free = all.into_iter().find(|d| !claimed.contains(d))?;
         claimed.push(free.clone());
         Some(free)
+    }
+
+    /// Effective dimensions, refresh and requested placement reported after
+    /// Windows accepted the mode (including a possible @60 fallback).
+    pub fn effective_mode(&self) -> Option<(u32, u32, u32, Position)> {
+        let (w, h, _, pos) = self.applied?;
+        Some((w, h, self.effective_hz?, pos))
     }
 }
 
@@ -199,28 +310,56 @@ impl VirtualDisplay {
 fn desktop_bounds_without(device: &str) -> (i32, i32, i32, i32) {
     let mut bounds: Option<(i32, i32, i32, i32)> = None;
     unsafe {
-        let mut adapter = DISPLAY_DEVICEW { cb: size_of::<DISPLAY_DEVICEW>() as u32, ..Default::default() };
+        let mut adapter = DISPLAY_DEVICEW {
+            cb: size_of::<DISPLAY_DEVICEW>() as u32,
+            ..Default::default()
+        };
         let mut i = 0;
         while EnumDisplayDevicesW(PCWSTR::null(), i, &mut adapter, 0).as_bool() {
             i += 1;
             let name = from_wide(&adapter.DeviceName);
-            if name == device || adapter.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP != DISPLAY_DEVICE_ATTACHED_TO_DESKTOP {
+            if name == device
+                || adapter.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP
+                    != DISPLAY_DEVICE_ATTACHED_TO_DESKTOP
+            {
                 continue;
             }
             let wide_name = wide(&name);
-            let mut mode = DEVMODEW { dmSize: size_of::<DEVMODEW>() as u16, ..Default::default() };
-            if !EnumDisplaySettingsW(PCWSTR(wide_name.as_ptr()), ENUM_CURRENT_SETTINGS, &mut mode).as_bool() {
+            let mut mode = DEVMODEW {
+                dmSize: size_of::<DEVMODEW>() as u16,
+                ..Default::default()
+            };
+            if !EnumDisplaySettingsW(PCWSTR(wide_name.as_ptr()), ENUM_CURRENT_SETTINGS, &mut mode)
+                .as_bool()
+            {
                 continue;
             }
             let p = mode.Anonymous1.Anonymous2.dmPosition;
-            let rect = (p.x, p.y, p.x + mode.dmPelsWidth as i32, p.y + mode.dmPelsHeight as i32);
+            let rect = (
+                p.x,
+                p.y,
+                p.x + mode.dmPelsWidth as i32,
+                p.y + mode.dmPelsHeight as i32,
+            );
             bounds = Some(match bounds {
                 None => rect,
-                Some(b) => (b.0.min(rect.0), b.1.min(rect.1), b.2.max(rect.2), b.3.max(rect.3)),
+                Some(b) => (
+                    b.0.min(rect.0),
+                    b.1.min(rect.1),
+                    b.2.max(rect.2),
+                    b.3.max(rect.3),
+                ),
             });
         }
     }
-    bounds.unwrap_or_else(|| unsafe { (0, 0, GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN)) })
+    bounds.unwrap_or_else(|| unsafe {
+        (
+            0,
+            0,
+            GetSystemMetrics(SM_CXSCREEN),
+            GetSystemMetrics(SM_CYSCREEN),
+        )
+    })
 }
 
 /// GDI name of a virtual monitor (attached or not), if one is plugged in.
@@ -232,13 +371,25 @@ pub fn find_device() -> Option<String> {
 pub fn find_devices() -> Vec<String> {
     let mut found = Vec::new();
     unsafe {
-        let mut adapter = DISPLAY_DEVICEW { cb: size_of::<DISPLAY_DEVICEW>() as u32, ..Default::default() };
+        let mut adapter = DISPLAY_DEVICEW {
+            cb: size_of::<DISPLAY_DEVICEW>() as u32,
+            ..Default::default()
+        };
         let mut i = 0;
         while EnumDisplayDevicesW(PCWSTR::null(), i, &mut adapter, 0).as_bool() {
             i += 1;
             let name = wide(&from_wide(&adapter.DeviceName));
-            let mut monitor = DISPLAY_DEVICEW { cb: size_of::<DISPLAY_DEVICEW>() as u32, ..Default::default() };
-            if EnumDisplayDevicesW(PCWSTR(name.as_ptr()), 0, &mut monitor, EDD_GET_DEVICE_INTERFACE_NAME).as_bool()
+            let mut monitor = DISPLAY_DEVICEW {
+                cb: size_of::<DISPLAY_DEVICEW>() as u32,
+                ..Default::default()
+            };
+            if EnumDisplayDevicesW(
+                PCWSTR(name.as_ptr()),
+                0,
+                &mut monitor,
+                EDD_GET_DEVICE_INTERFACE_NAME,
+            )
+            .as_bool()
                 && from_wide(&monitor.DeviceID).contains(MONITOR_ID)
             {
                 found.push(from_wide(&adapter.DeviceName));
@@ -248,18 +399,38 @@ pub fn find_devices() -> Vec<String> {
     found
 }
 
-fn current_size(device: &str) -> Option<(u32, u32)> {
+fn current_mode(device: &str) -> Option<(u32, u32, u32, i32, i32)> {
     let name = wide(device);
-    let mut mode = DEVMODEW { dmSize: size_of::<DEVMODEW>() as u16, ..Default::default() };
-    unsafe { EnumDisplaySettingsW(PCWSTR(name.as_ptr()), ENUM_CURRENT_SETTINGS, &mut mode).as_bool() }
-        .then_some((mode.dmPelsWidth, mode.dmPelsHeight))
+    let mut mode = DEVMODEW {
+        dmSize: size_of::<DEVMODEW>() as u16,
+        ..Default::default()
+    };
+    if !unsafe {
+        EnumDisplaySettingsW(PCWSTR(name.as_ptr()), ENUM_CURRENT_SETTINGS, &mut mode).as_bool()
+    } {
+        return None;
+    }
+    let p = unsafe { mode.Anonymous1.Anonymous2.dmPosition };
+    Some((
+        mode.dmPelsWidth,
+        mode.dmPelsHeight,
+        mode.dmDisplayFrequency,
+        p.x,
+        p.y,
+    ))
 }
 
 /// Stages `mode` for `device` and applies it.
 fn apply(device: &str, mut mode: DEVMODEW) -> DISP_CHANGE {
     let name = wide(device);
     unsafe {
-        let r = ChangeDisplaySettingsExW(PCWSTR(name.as_ptr()), Some(&mut mode), None, CDS_UPDATEREGISTRY | CDS_NORESET, None);
+        let r = ChangeDisplaySettingsExW(
+            PCWSTR(name.as_ptr()),
+            Some(&mut mode),
+            None,
+            CDS_UPDATEREGISTRY | CDS_NORESET,
+            None,
+        );
         if r != DISP_CHANGE_SUCCESSFUL {
             return r;
         }
@@ -287,7 +458,39 @@ mod tests {
 <count>1</count>
 </monitors>
 <resolutions></resolutions>";
-        assert!(with_modes(xml, &[]).unwrap().contains(&format!("<count>{MAX_TABLETS}</count>")));
+        assert!(with_modes(xml, &[])
+            .unwrap()
+            .contains(&format!("<count>{MAX_TABLETS}</count>")));
+    }
+
+    #[test]
+    fn leaves_missing_or_unterminated_monitor_count_unchanged() {
+        let without_count = "<monitors></monitors>";
+        assert_eq!(with_count(without_count), without_count);
+
+        let unterminated = "<monitors><count>1</monitors>";
+        assert_eq!(with_count(unterminated), unterminated);
+    }
+
+    #[test]
+    fn trim_preserves_non_stock_modes_and_xml_outside_mode_blocks() {
+        let xml = "<root>before</root>
+<resolutions>
+<resolution><width>1280</width><height>800</height><refresh_rate>60</refresh_rate></resolution>
+<resolution><width>800</width><height>600</height><refresh_rate>30</refresh_rate></resolution>
+</resolutions>
+<tail>after</tail>
+<global>
+<g_refresh_rate>144</g_refresh_rate>
+<g_refresh_rate>60</g_refresh_rate>
+</global>";
+        let trimmed = trim(xml);
+        assert!(trimmed.contains("<root>before</root>"));
+        assert!(trimmed.contains(&entry(1280, 800)));
+        assert!(!trimmed.contains("<height>600</height>"));
+        assert!(trimmed.contains("<tail>after</tail>"));
+        assert!(!trimmed.contains("<g_refresh_rate>144</g_refresh_rate>"));
+        assert!(trimmed.contains("<g_refresh_rate>60</g_refresh_rate>"));
     }
 
     #[test]
@@ -298,5 +501,16 @@ mod tests {
         assert!(xml.contains("<g_refresh_rate>60</g_refresh_rate>"));
         assert!(xml.contains(&entry(2304, 1440)) && xml.contains(&entry(1440, 2304)));
         assert_eq!(with_modes(&xml, &[(2304, 1440)]).unwrap(), xml); // idempotent: no needless driver restarts
+    }
+
+    #[test]
+    fn bounds_existing_and_added_modes() {
+        let existing: String = (0..(MAX_MODES + 8))
+            .map(|i| entry(800 + i as u32, 600))
+            .collect();
+        let xml = format!("<resolutions>{existing}</resolutions>");
+        let bounded = with_modes(&xml, &[(2304, 1440)]).unwrap();
+        assert!(count_modes(&bounded) <= MAX_MODES);
+        assert_eq!(with_modes(&bounded, &[(2304, 1440)]).unwrap(), bounded);
     }
 }

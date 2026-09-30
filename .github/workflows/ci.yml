@@ -16,6 +16,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: desktop/src-tauri
@@ -23,7 +26,11 @@ jobs:
         shell: bash
         run: mkdir -p resources/adb resources/vdd && touch resources/adb/x resources/vdd/x resources/tabdisplay.apk
       - run: cargo check --locked
-      # macOS: o binário de teste não acha libswift_Concurrency no runner; só compila lá.
+      - run: cargo fmt --all -- --check
+      - name: Verificar sintaxe do frontend
+        run: node --check ../src/main.js
+      # O runner macOS compila o crate, mas o binário de teste não encontra
+      # libswift_Concurrency; isso é uma limitação nomeada, não um skip oculto.
       - run: cargo test --locked
         if: runner.os == 'Windows'
 
@@ -40,4 +47,4 @@ jobs:
           java-version: 17
       - uses: gradle/actions/setup-gradle@v4
       - run: chmod +x gradlew
-      - run: ./gradlew assembleDebug testDebugUnitTest
+      - run: ./gradlew assembleDebug testDebugUnitTest lintDebug

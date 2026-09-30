@@ -8,7 +8,8 @@ use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 /// Public half of the seller's key (`node scripts/license.mjs keygen`).
-const PUBLIC_KEY: [u8; 32] = hex(b"de9f963be453d77eba4f48c7ac5394f4cda06f9e3e9ac094a55bdd4c9542ed56");
+const PUBLIC_KEY: [u8; 32] =
+    hex(b"de9f963be453d77eba4f48c7ac5394f4cda06f9e3e9ac094a55bdd4c9542ed56");
 /// Where the "buy" button in the app goes. ponytail: placeholder until the store page exists.
 pub const BUY_URL: &str = "https://github.com/savetheforest/tabdisplay";
 
@@ -23,7 +24,11 @@ static CURRENT: Mutex<Option<Licence>> = Mutex::new(None);
 static PATH: OnceLock<PathBuf> = OnceLock::new();
 
 const fn digit(c: u8) -> u8 {
-    if c <= b'9' { c - b'0' } else { c - b'a' + 10 }
+    if c <= b'9' {
+        c - b'0'
+    } else {
+        c - b'a' + 10
+    }
 }
 
 const fn hex(s: &[u8; 64]) -> [u8; 32] {
@@ -41,10 +46,15 @@ fn verify(token: &str, key: &VerifyingKey) -> Result<Licence, &'static str> {
     let token = token.trim();
     let (signed, signature) = token.rsplit_once('.').ok_or("Licença inválida.")?;
     let payload = signed.strip_prefix("TDL1.").ok_or("Licença inválida.")?;
-    let signature = URL_SAFE_NO_PAD.decode(signature).map_err(|_| "Licença inválida.")?;
+    let signature = URL_SAFE_NO_PAD
+        .decode(signature)
+        .map_err(|_| "Licença inválida.")?;
     let signature = Signature::from_slice(&signature).map_err(|_| "Licença inválida.")?;
-    key.verify_strict(signed.as_bytes(), &signature).map_err(|_| "Licença inválida: a assinatura não confere.")?;
-    let json = URL_SAFE_NO_PAD.decode(payload).map_err(|_| "Licença inválida.")?;
+    key.verify_strict(signed.as_bytes(), &signature)
+        .map_err(|_| "Licença inválida: a assinatura não confere.")?;
+    let json = URL_SAFE_NO_PAD
+        .decode(payload)
+        .map_err(|_| "Licença inválida.")?;
     serde_json::from_slice(&json).map_err(|_| "Licença inválida.")
 }
 
@@ -55,7 +65,9 @@ fn public_key() -> VerifyingKey {
 /// Loads `dir/license.txt` if it holds a valid licence.
 pub fn init(dir: PathBuf) {
     let path = dir.join("license.txt");
-    let current = std::fs::read_to_string(&path).ok().and_then(|t| verify(&t, &public_key()).ok());
+    let current = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| verify(&t, &public_key()).ok());
     *CURRENT.lock().unwrap() = current;
     let _ = PATH.set(path);
 }
@@ -96,13 +108,18 @@ mod tests {
     #[test]
     fn accepts_a_licence_from_the_script() {
         let l = verify(TOKEN, &public_key()).unwrap();
-        assert_eq!((l.name.as_str(), l.email.as_str(), l.issued.as_str()), ("Teste da Silva", "teste@example.com", "2026-09-26"));
+        assert_eq!(
+            (l.name.as_str(), l.email.as_str(), l.issued.as_str()),
+            ("Teste da Silva", "teste@example.com", "2026-09-26")
+        );
     }
 
     #[test]
     fn rejects_tampered_and_foreign_licences() {
         // Different name in the payload, same signature.
-        let forged_payload = URL_SAFE_NO_PAD.encode(br#"{"name":"Outra Pessoa","email":"teste@example.com","issued":"2026-09-26"}"#);
+        let forged_payload = URL_SAFE_NO_PAD.encode(
+            br#"{"name":"Outra Pessoa","email":"teste@example.com","issued":"2026-09-26"}"#,
+        );
         let sig = TOKEN.rsplit_once('.').unwrap().1;
         assert!(verify(&format!("TDL1.{forged_payload}.{sig}"), &public_key()).is_err());
         // Flipped signature bit, truncated, garbage.

@@ -5,7 +5,9 @@
 //! ponytail: macOS has no public API for synthetic magnify gestures; use the private gesture CGEvent if apps that only
 //! react to real pinches (no zoom shortcut) matter.
 use super::display::CGPoint;
-use crate::input::{Action, Contact, Kind, Scroll};
+use crate::input::{
+    Action, Contact, Key, KeyEvent, Kind, Scroll, MOD_ALT, MOD_CTRL, MOD_META, MOD_SHIFT,
+};
 use std::ffi::c_void;
 use std::time::{Duration, Instant};
 
@@ -13,9 +15,26 @@ pub type Rect = (i32, i32, i32, i32);
 
 #[link(name = "CoreGraphics", kind = "framework")]
 unsafe extern "C" {
-    fn CGEventCreateMouseEvent(source: *const c_void, kind: u32, position: CGPoint, button: u32) -> *mut c_void;
-    fn CGEventCreateScrollWheelEvent2(source: *const c_void, units: u32, count: u32, wheel1: i32, wheel2: i32, wheel3: i32) -> *mut c_void;
+    fn CGEventCreateMouseEvent(
+        source: *const c_void,
+        kind: u32,
+        position: CGPoint,
+        button: u32,
+    ) -> *mut c_void;
+    fn CGEventCreateScrollWheelEvent2(
+        source: *const c_void,
+        units: u32,
+        count: u32,
+        wheel1: i32,
+        wheel2: i32,
+        wheel3: i32,
+    ) -> *mut c_void;
     fn CGEventCreateKeyboardEvent(source: *const c_void, keycode: u16, down: bool) -> *mut c_void;
+    fn CGEventKeyboardSetUnicodeString(
+        event: *mut c_void,
+        stringLength: usize,
+        unicodeString: *const u16,
+    );
     fn CGEventSetFlags(event: *mut c_void, flags: u64);
     fn CGEventSetIntegerValueField(event: *mut c_void, field: u32, value: i64);
     fn CGEventSetDoubleValueField(event: *mut c_void, field: u32, value: f64);
@@ -70,7 +89,10 @@ pub struct Injector {
 }
 
 fn point(c: &Contact, (l, t, r, b): Rect) -> CGPoint {
-    CGPoint { x: l as f64 + c.x.clamp(0.0, 1.0) as f64 * (r - l) as f64, y: t as f64 + c.y.clamp(0.0, 1.0) as f64 * (b - t) as f64 }
+    CGPoint {
+        x: l as f64 + c.x.clamp(0.0, 1.0) as f64 * (r - l) as f64,
+        y: t as f64 + c.y.clamp(0.0, 1.0) as f64 * (b - t) as f64,
+    }
 }
 
 fn distance(a: CGPoint, b: CGPoint) -> f64 {
@@ -110,7 +132,14 @@ fn command_key(key: u16) {
 
 fn scroll(dy: f64, dx: f64) {
     unsafe {
-        let e = CGEventCreateScrollWheelEvent2(std::ptr::null(), 0, 2, dy.round() as i32, dx.round() as i32, 0); // pixel units
+        let e = CGEventCreateScrollWheelEvent2(
+            std::ptr::null(),
+            0,
+            2,
+            dy.round() as i32,
+            dx.round() as i32,
+            0,
+        ); // pixel units
         if !e.is_null() {
             CGEventPost(0, e);
             CFRelease(e);
@@ -134,14 +163,24 @@ impl Injector {
             // Two fingers: scroll by how far their midpoint moved (natural direction, like a trackpad), or,
             // when the fingers moved apart/together more than the midpoint moved, zoom.
             let n = down.len() as f64;
-            let mid = down.iter().map(|c| point(c, rect)).fold(CGPoint::default(), |a, p| CGPoint { x: a.x + p.x / n, y: a.y + p.y / n });
+            let mid = down
+                .iter()
+                .map(|c| point(c, rect))
+                .fold(CGPoint::default(), |a, p| CGPoint {
+                    x: a.x + p.x / n,
+                    y: a.y + p.y / n,
+                });
             let spread = distance(point(down[0], rect), point(down[1], rect));
             if let (Some(prev), Some(prev_spread)) = (self.scroll, self.spread.replace(spread)) {
                 let change = spread - prev_spread;
                 if change.abs() > distance(mid, prev) {
                     self.zoom += change;
                     while self.zoom.abs() >= ZOOM_STEP {
-                        command_key(if self.zoom > 0.0 { KEY_EQUALS } else { KEY_MINUS });
+                        command_key(if self.zoom > 0.0 {
+                            KEY_EQUALS
+                        } else {
+                            KEY_MINUS
+                        });
                         self.zoom -= ZOOM_STEP.copysign(self.zoom);
                     }
                 } else {
@@ -167,7 +206,11 @@ impl Injector {
         match c.action {
             Action::Down => {
                 post(MOVED, at, 0, 0, None);
-                self.touch = Some(Touch { start: Instant::now(), at, dragging: false });
+                self.touch = Some(Touch {
+                    start: Instant::now(),
+                    at,
+                    dragging: false,
+                });
             }
             Action::Move => {
                 let Some(t) = &mut self.touch else { return };
@@ -189,7 +232,12 @@ impl Injector {
                     post(RIGHT_UP, t.at, 1, 1, None);
                 } else {
                     let clicks = match self.last_tap {
-                        Some((when, where_, n)) if when.elapsed() < DOUBLE_CLICK && distance(where_, t.at) < SLOP * 2.0 => n + 1,
+                        Some((when, where_, n))
+                            if when.elapsed() < DOUBLE_CLICK
+                                && distance(where_, t.at) < SLOP * 2.0 =>
+                        {
+                            n + 1
+                        }
                         _ => 1,
                     };
                     post(LEFT_DOWN, t.at, 0, clicks, None);
@@ -205,10 +253,53 @@ impl Injector {
     /// Moves the cursor to the point and scrolls there (a mouse wheel notch is about 40 px).
     pub fn scroll(&mut self, s: &Scroll, rect: Rect) {
         let (l, t, r, b) = rect;
-        let at = CGPoint { x: l as f64 + s.x.clamp(0.0, 1.0) as f64 * (r - l) as f64, y: t as f64 + s.y.clamp(0.0, 1.0) as f64 * (b - t) as f64 };
+        let at = CGPoint {
+            x: l as f64 + s.x.clamp(0.0, 1.0) as f64 * (r - l) as f64,
+            y: t as f64 + s.y.clamp(0.0, 1.0) as f64 * (b - t) as f64,
+        };
         post(MOVED, at, 0, 0, None);
         // Android: dy > 0 scrolls up, dx > 0 scrolls right; CG wheel2 > 0 moves content right.
         scroll(s.dy as f64 * 40.0, -(s.dx as f64) * 40.0);
+    }
+
+    /// Sends committed Unicode text or a bounded logical key. Text is attached to the CGEvent
+    /// directly so IME output is not reinterpreted as a Mac virtual-key layout.
+    pub fn key(&mut self, event: &KeyEvent) {
+        match event {
+            KeyEvent::Text(text) => {
+                let utf16: Vec<u16> = text.encode_utf16().collect();
+                unsafe {
+                    let e = CGEventCreateKeyboardEvent(std::ptr::null(), 0, true);
+                    if !e.is_null() {
+                        CGEventKeyboardSetUnicodeString(e, utf16.len(), utf16.as_ptr());
+                        CGEventPost(0, e);
+                        CFRelease(e);
+                    }
+                    let e = CGEventCreateKeyboardEvent(std::ptr::null(), 0, false);
+                    if !e.is_null() {
+                        CGEventKeyboardSetUnicodeString(e, utf16.len(), utf16.as_ptr());
+                        CGEventPost(0, e);
+                        CFRelease(e);
+                    }
+                }
+            }
+            KeyEvent::Key {
+                key,
+                modifiers,
+                down,
+            } => {
+                let Some(code) = key_code(*key) else { return };
+                unsafe {
+                    let e = CGEventCreateKeyboardEvent(std::ptr::null(), code, *down);
+                    if !e.is_null() {
+                        CGEventSetFlags(e, modifier_flags(*modifiers));
+                        CGEventPost(0, e);
+                        CFRelease(e);
+                    }
+                }
+            }
+            KeyEvent::Cancel => {}
+        }
     }
 
     fn pen(&mut self, c: &Contact, rect: Rect) {
@@ -217,20 +308,74 @@ impl Injector {
         match c.action {
             Action::Hover => post(MOVED, at, 0, 0, None),
             Action::Down => {
-                let (down, button) = if c.barrel { (RIGHT_DOWN, 1) } else { (LEFT_DOWN, 0) };
+                let (down, button) = if c.barrel {
+                    (RIGHT_DOWN, 1)
+                } else {
+                    (LEFT_DOWN, 0)
+                };
                 post(down, at, button, 1, pressure);
-                self.pen_button = Some(if c.barrel { (RIGHT_DRAGGED, RIGHT_UP) } else { (LEFT_DRAGGED, LEFT_UP) });
+                self.pen_button = Some(if c.barrel {
+                    (RIGHT_DRAGGED, RIGHT_UP)
+                } else {
+                    (LEFT_DRAGGED, LEFT_UP)
+                });
             }
             Action::Move => {
                 if let Some((dragged, _)) = self.pen_button {
-                    post(dragged, at, if dragged == RIGHT_DRAGGED { 1 } else { 0 }, 0, pressure);
+                    post(
+                        dragged,
+                        at,
+                        if dragged == RIGHT_DRAGGED { 1 } else { 0 },
+                        0,
+                        pressure,
+                    );
                 }
             }
             Action::Up | Action::Leave => {
                 if let Some((dragged, up)) = self.pen_button.take() {
-                    post(up, at, if dragged == RIGHT_DRAGGED { 1 } else { 0 }, 1, Some(0.0));
+                    post(
+                        up,
+                        at,
+                        if dragged == RIGHT_DRAGGED { 1 } else { 0 },
+                        1,
+                        Some(0.0),
+                    );
                 }
             }
         }
     }
+}
+
+fn modifier_flags(modifiers: u8) -> u64 {
+    let mut flags = 0;
+    if modifiers & MOD_SHIFT != 0 {
+        flags |= 0x0002_0000;
+    }
+    if modifiers & MOD_CTRL != 0 {
+        flags |= 0x0004_0000;
+    }
+    if modifiers & MOD_ALT != 0 {
+        flags |= 0x0008_0000;
+    }
+    if modifiers & MOD_META != 0 {
+        flags |= FLAG_COMMAND;
+    }
+    flags
+}
+
+fn key_code(key: Key) -> Option<u16> {
+    Some(match key {
+        Key::Enter => 36,
+        Key::Backspace => 51,
+        Key::Tab => 48,
+        Key::Escape => 53,
+        Key::Delete => 117,
+        Key::ArrowLeft => 123,
+        Key::ArrowRight => 124,
+        Key::ArrowUp => 126,
+        Key::ArrowDown => 125,
+        Key::Home => 115,
+        Key::End => 119,
+        Key::Space => 49,
+    })
 }

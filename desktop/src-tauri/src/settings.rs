@@ -94,6 +94,38 @@ impl Default for Settings {
     }
 }
 
+impl Settings {
+    /// Rejects values before they reach capture, the encoder or the virtual display.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if let Some((width, height)) = self.resolution {
+            if width < 16
+                || height < 16
+                || width > 7680
+                || height > 7680
+                || width % 16 != 0
+                || height % 16 != 0
+                || (width as u64) * (height as u64) > 16_777_216
+            {
+                return Err("resolution out of bounds");
+            }
+        }
+        if !(1..=240).contains(&self.fps) {
+            return Err("fps out of bounds");
+        }
+        if !(1..=200).contains(&self.bitrate_mbps) {
+            return Err("bitrate out of bounds");
+        }
+        if self
+            .mirror_monitor
+            .as_ref()
+            .is_some_and(|name| name.len() > 512)
+        {
+            return Err("monitor name too long");
+        }
+        Ok(())
+    }
+}
+
 static CURRENT: Mutex<Option<Settings>> = Mutex::new(None);
 static PATH: OnceLock<PathBuf> = OnceLock::new();
 pub static VERSION: AtomicU64 = AtomicU64::new(0);
@@ -102,11 +134,17 @@ pub static VERSION: AtomicU64 = AtomicU64::new(0);
 pub fn init(dir: PathBuf) {
     let path = dir.join("settings.json");
     // 0.1 used the identifier com.tabdisplay.app; carry its settings over once.
-    let old = dir.with_file_name("com.tabdisplay.app").join("settings.json");
+    let old = dir
+        .with_file_name("com.tabdisplay.app")
+        .join("settings.json");
     let text = std::fs::read_to_string(&path).or_else(|_| std::fs::read_to_string(old));
     // Settings from before the first-run guide existed belong to someone who already knows the app.
     let known_user = text.as_ref().is_ok_and(|t| !t.contains("\"onboarded\""));
-    let mut loaded: Option<Settings> = text.ok().and_then(|s| serde_json::from_str(&s).ok());
+    let mut loaded: Option<Settings> = text.ok().and_then(|s| {
+        serde_json::from_str(&s)
+            .ok()
+            .filter(|settings: &Settings| settings.validate().is_ok())
+    });
     if let (Some(s), true) = (&mut loaded, known_user) {
         s.onboarded = true;
     }
@@ -127,24 +165,155 @@ fn require_licence_for_extend(s: &mut Settings) {
     }
 }
 
-pub fn set(mut s: Settings) {
-    require_licence_for_extend(&mut s);
-    if let Some(path) = PATH.get() {
-        let _ = std::fs::create_dir_all(path.parent().unwrap());
-        let _ = std::fs::write(path, serde_json::to_string_pretty(&s).unwrap());
+fn video_changed(before: &Settings, after: &Settings) -> bool {
+    before.mode != after.mode
+        || before.profile != after.profile
+        || before.resolution != after.resolution
+        || before.position != after.position
+        || before.mirror_monitor != after.mirror_monitor
+        || before.fps != after.fps
+        || before.bitrate_mbps != after.bitrate_mbps
+        || before.encoder != after.encoder
+}
+
+pub(crate) fn persist(path: &PathBuf, text: &[u8]) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "pasta de configurações inválida".to_string())?;
+    std::fs::create_dir_all(parent)
+        .map_err(|e| format!("não foi possível criar a pasta de configurações: {e}"))?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, text)
+        .map_err(|e| format!("não foi possível escrever configurações temporárias: {e}"))?;
+    #[cfg(windows)]
+    {
+        let backup = path.with_extension("json.bak");
+        if path.exists() {
+            let _ = std::fs::remove_file(&backup);
+            std::fs::rename(path, &backup)
+                .map_err(|e| format!("não foi possível preparar substituição atômica: {e}"))?;
+            if let Err(e) = std::fs::rename(&tmp, path) {
+                let _ = std::fs::rename(&backup, path);
+                let _ = std::fs::remove_file(&tmp);
+                return Err(format!("não foi possível substituir configurações: {e}"));
+            }
+            let _ = std::fs::remove_file(backup);
+        } else {
+            std::fs::rename(&tmp, path)
+                .map_err(|e| format!("não foi possível ativar configurações: {e}"))?;
+        }
     }
+    #[cfg(not(windows))]
+    std::fs::rename(&tmp, path)
+        .map_err(|e| format!("não foi possível ativar configurações: {e}"))?;
+    Ok(())
+}
+
+pub fn set(mut s: Settings) -> Result<(), String> {
+    if let Err(reason) = s.validate() {
+        crate::telemetry::warn(format!("invalid settings ignored: {reason}"));
+        return Err(reason.into());
+    }
+    require_licence_for_extend(&mut s);
+    let before = get();
+    if let Some(path) = PATH.get() {
+        let text = serde_json::to_vec_pretty(&s)
+            .map_err(|e| format!("não foi possível serializar configurações: {e}"))?;
+        persist(path, &text)?;
+    }
+    let changed = video_changed(&before, &s);
     *CURRENT.lock().unwrap() = Some(s);
-    VERSION.fetch_add(1, Ordering::Relaxed);
+    if changed {
+        VERSION.fetch_add(1, Ordering::Relaxed);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn extend_needs_a_licence() {
         // No licence is loaded in tests: asking for Extend leaves the mode at Mirror.
-        set(Settings { mode: Mode::Extend, ..Default::default() });
+        set(Settings {
+            mode: Mode::Extend,
+            ..Default::default()
+        })
+        .unwrap();
         assert!(get().mode == Mode::Mirror);
+    }
+
+    #[test]
+    fn rejects_unbounded_video_settings() {
+        let mut invalid = Settings::default();
+        invalid.fps = 0;
+        assert!(invalid.validate().is_err());
+        invalid = Settings {
+            resolution: Some((0, 4096)),
+            ..Settings::default()
+        };
+        assert!(invalid.validate().is_err());
+        invalid = Settings {
+            resolution: Some((4096, 4096)),
+            ..Settings::default()
+        };
+        assert!(invalid.validate().is_ok());
+    }
+
+    #[test]
+    fn only_video_fields_bump_the_stream_revision() {
+        let before = Settings::default();
+        let audio_only = Settings {
+            audio: false,
+            ..before.clone()
+        };
+        assert!(!video_changed(&before, &audio_only));
+        let profile = Settings {
+            profile: Profile::Quality,
+            ..before.clone()
+        };
+        assert!(video_changed(&before, &profile));
+        let onboarding = Settings {
+            onboarded: true,
+            ..before
+        };
+        assert!(!video_changed(&Settings::default(), &onboarding));
+    }
+
+    #[test]
+    fn persistence_replaces_existing_file_without_leftover_staging_files() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("tabdisplay-settings-{nonce}"));
+        let path = dir.join("settings.json");
+        let first = serde_json::to_vec(&Settings {
+            bitrate_mbps: 10,
+            ..Settings::default()
+        })
+        .unwrap();
+        let second = serde_json::to_vec(&Settings {
+            bitrate_mbps: 40,
+            ..Settings::default()
+        })
+        .unwrap();
+
+        persist(&path, &first).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Settings>(&std::fs::read(&path).unwrap())
+                .unwrap()
+                .bitrate_mbps,
+            10
+        );
+        persist(&path, &second).unwrap();
+        let loaded: Settings = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(loaded.bitrate_mbps, 40);
+        assert!(!path.with_extension("json.tmp").exists());
+        assert!(!path.with_extension("json.bak").exists());
+
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -2,6 +2,12 @@
 
 Tablet Android como monitor do PC. `desktop/` = Tauri (Rust), `android/` = app Kotlin. Protocolo: [PROTOCOL.md](PROTOCOL.md).
 
+## Planejamento técnico
+
+O [backlog documentado](docs/tasks/README.md) reúne tarefas de estabilidade, FPS, USB, mobile, segurança,
+distribuição e recursos futuros, com dependências, critérios de aceite e instruções de execução para IA.
+Comece pelo [guia de execução](docs/tasks/GUIA-EXECUCAO.md) antes de implementar uma tarefa.
+
 ## Instalar (Windows)
 Rode `TabDisplay_<versão>_x64-setup.exe`. O instalador (pede admin uma vez):
 - instala o [Virtual Display Driver](https://github.com/VirtualDrivers/Virtual-Display-Driver) (MIT) com as resoluções do app,
@@ -10,7 +16,8 @@ Rode `TabDisplay_<versão>_x64-setup.exe`. O instalador (pede admin uma vez):
 - traz o `adb` e o app do tablet (`tabdisplay.apk`).
 
 No tablet: ligue a **depuração USB**, conecte o cabo e clique em **Instalar app no tablet** na janela do PC.
-Depois disso o tablet lista o PC sozinho: toque em **USB (cabo)** ou no nome do PC (Wi‑Fi).
+Depois disso o tablet lista uma **Conexão local pelo ADB**. Na primeira conexão ela ainda pede o código de
+pareamento; depois o token e o certificado ficam guardados neste tablet para esse PC.
 
 Sem mexer em opções do desenvolvedor: instale o app pelo APK (compartilhado por algum outro meio) e,
 já com o cabo conectado, ligue **Compartilhar internet pelo USB** nas configurações do tablet. O PC
@@ -32,7 +39,7 @@ ambiente, nunca do repositório:
 - `TABDISPLAY_SIGN_THUMBPRINT`: certificado no repositório do Windows (token USB de um certificado EV).
 
 Sem nenhum dos dois o build sai sem assinatura (aviso no log), como sempre. Precisa do `signtool` (Windows SDK).
-Confira: `signtool verify /pa /v TabDisplay_0.1.0_x64-setup.exe`.
+Confira: `signtool verify /pa /v TabDisplay_0.2.0_x64-setup.exe`.
 
 Qual certificado comprar: um EV tira o aviso do SmartScreen na hora; um OV comum assina, mas o SmartScreen
 ainda avisa até o app ganhar reputação. Vale ver também o Azure Trusted Signing (assinatura na nuvem, sem

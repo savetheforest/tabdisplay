@@ -35,16 +35,25 @@ impl SCStreamOutputTrait for Handler {
         if !matches!(sample.frame_status(), Some(SCFrameStatus::Complete)) {
             return;
         }
-        let Some(pixels) = sample.pixel_buffer() else { return };
-        let Ok(guard) = pixels.lock_read_only() else { return };
-        let (w, h, stride) = (self.width.min(guard.width()), self.height.min(guard.height()), guard.bytes_per_row());
+        let Some(pixels) = sample.pixel_buffer() else {
+            return;
+        };
+        let Ok(guard) = pixels.lock_read_only() else {
+            return;
+        };
+        let (w, h, stride) = (
+            self.width.min(guard.width()),
+            self.height.min(guard.height()),
+            guard.bytes_per_row(),
+        );
         let base = guard.base_address();
         if base.is_null() {
             return;
         }
         let (lock, ready) = &*self.shared;
-        let mut latest = lock.lock().unwrap();
+        let Ok(mut latest) = lock.lock() else { return };
         latest.bgra.resize(self.width * self.height * 4, 0);
+        latest.bgra.fill(0);
         let row = w * 4;
         for y in 0..h {
             let src = unsafe { std::slice::from_raw_parts(base.add(y * stride), row) };
@@ -77,7 +86,10 @@ pub fn pixel_size(id: u32) -> (usize, usize) {
             let b = CGDisplayBounds(id);
             return (b.size.width as usize, b.size.height as usize);
         }
-        let size = (CGDisplayModeGetPixelWidth(mode), CGDisplayModeGetPixelHeight(mode));
+        let size = (
+            CGDisplayModeGetPixelWidth(mode),
+            CGDisplayModeGetPixelHeight(mode),
+        );
         CGDisplayModeRelease(mode);
         size
     }
@@ -86,39 +98,80 @@ pub fn pixel_size(id: u32) -> (usize, usize) {
 impl Capture {
     /// Captures the display whose CGDirectDisplayID is `device`, or the main display if None, scaled
     /// (on the GPU, by ScreenCaptureKit) to `fit(pixel size)` so the tablet's decoder can take it.
-    pub fn open(device: Option<&str>, fit: impl Fn((u32, u32)) -> (u32, u32)) -> Result<Self, String> {
-        let content = SCShareableContent::get().map_err(|e| format!("sem permissão de Gravação de Tela? ({e:?})"))?;
-        let want = device.and_then(|d| d.parse::<u32>().ok()).unwrap_or_else(|| unsafe { CGMainDisplayID() });
-        let display = content.displays().into_iter().find(|d| d.display_id() == want).ok_or("monitor não encontrado")?;
+    pub fn open(
+        device: Option<&str>,
+        fps: u32,
+        fit: impl Fn((u32, u32)) -> (u32, u32),
+    ) -> Result<Self, String> {
+        let content = SCShareableContent::get()
+            .map_err(|e| format!("sem permissão de Gravação de Tela? ({e:?})"))?;
+        let want = device
+            .and_then(|d| d.parse::<u32>().ok())
+            .unwrap_or_else(|| unsafe { CGMainDisplayID() });
+        let display = content
+            .displays()
+            .into_iter()
+            .find(|d| d.display_id() == want)
+            .ok_or("monitor não encontrado")?;
         let id = display.display_id();
         let (pw, ph) = pixel_size(id);
         let (fw, fh) = fit((pw as u32, ph as u32));
         let (width, height) = (fw as usize, fh as usize);
         let b = unsafe { CGDisplayBounds(id) };
-        let rect = (b.origin.x as i32, b.origin.y as i32, (b.origin.x + b.size.width) as i32, (b.origin.y + b.size.height) as i32);
+        let rect = (
+            b.origin.x as i32,
+            b.origin.y as i32,
+            (b.origin.x + b.size.width) as i32,
+            (b.origin.y + b.size.height) as i32,
+        );
 
-        let filter = SCContentFilter::create().with_display(&display).with_excluding_windows(&[]).build().map_err(|e| format!("{e:?}"))?;
+        let filter = SCContentFilter::create()
+            .with_display(&display)
+            .with_excluding_windows(&[])
+            .build()
+            .map_err(|e| format!("{e:?}"))?;
         let config = SCStreamConfiguration::new()
             .with_width(width as u32)
             .with_height(height as u32)
             .with_pixel_format(PixelFormat::BGRA)
             .with_shows_cursor(true)
-            .with_minimum_frame_interval(&CMTime::new(1, 120))
+            .with_minimum_frame_interval(&CMTime::new(1, fps.clamp(1, 240) as i32))
             .with_queue_depth(3);
         let shared: Shared = Arc::default();
         let mut stream = SCStream::new(&filter, &config).map_err(|e| format!("{e:?}"))?;
         stream
-            .add_output_handler(Handler { shared: shared.clone(), width, height }, SCStreamOutputType::Screen)
+            .add_output_handler(
+                Handler {
+                    shared: shared.clone(),
+                    width,
+                    height,
+                },
+                SCStreamOutputType::Screen,
+            )
             .map_err(|e| format!("{e:?}"))?;
         stream.start_capture().map_err(|e| format!("{e:?}"))?;
-        Ok(Self { stream, shared, width, height, rect })
+        Ok(Self {
+            stream,
+            shared,
+            width,
+            height,
+            rect,
+        })
     }
 
     /// Waits up to `timeout_ms` for a new frame and copies it into `buf`. Returns false on timeout.
     pub fn next(&mut self, buf: &mut Vec<u8>, timeout_ms: u32) -> Result<bool, String> {
         let (lock, ready) = &*self.shared;
-        let latest = lock.lock().unwrap();
-        let (mut latest, _) = ready.wait_timeout_while(latest, Duration::from_millis(timeout_ms as u64), |l| !l.fresh).unwrap();
+        let Ok(latest) = lock.lock() else {
+            return Ok(false);
+        };
+        let Ok((mut latest, _)) =
+            ready.wait_timeout_while(latest, Duration::from_millis(timeout_ms as u64), |l| {
+                !l.fresh
+            })
+        else {
+            return Ok(false);
+        };
         if !latest.fresh {
             return Ok(false);
         }
@@ -130,7 +183,9 @@ impl Capture {
 
 /// Displays that can be mirrored: (CGDirectDisplayID as text, width, height).
 pub fn monitors() -> Vec<(String, u32, u32)> {
-    let Ok(content) = SCShareableContent::get() else { return Vec::new() };
+    let Ok(content) = SCShareableContent::get() else {
+        return Vec::new();
+    };
     content
         .displays()
         .into_iter()

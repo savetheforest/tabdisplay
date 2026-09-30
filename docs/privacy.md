@@ -41,4 +41,7 @@ O app não é direcionado a crianças e não coleta dados de ninguém.
 Se esta política mudar, a nova versão aparece neste endereço com a data atualizada.
 
 ## Contato
+Este documento ainda não está pronto para publicação: falta substituir o contato abaixo por um endereço real
+do responsável pela distribuição. Não publicar com o placeholder.
+
 Dúvidas: [SEU E-MAIL DE CONTATO]

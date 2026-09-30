@@ -13,6 +13,10 @@ val releaseProps = Properties().apply {
 }
 fun releaseKey(env: String, prop: String): String? = System.getenv(env) ?: releaseProps.getProperty(prop)
 val releaseStore = releaseKey("TABDISPLAY_KEYSTORE", "storeFile")
+val requireReleaseSigning = System.getenv("TABDISPLAY_REQUIRE_RELEASE_SIGNING") == "true"
+if (requireReleaseSigning && releaseStore == null) {
+    throw GradleException("TABDISPLAY_REQUIRE_RELEASE_SIGNING=true, mas a keystore de release não foi configurada")
+}
 
 android {
     namespace = "com.tabdisplay"
@@ -25,6 +29,9 @@ android {
         versionName = "0.2.0"
         // Crash reporting stays off without a DSN: TABDISPLAY_SENTRY_DSN=... ./gradlew assembleRelease
         buildConfigField("String", "SENTRY_DSN", "\"${System.getenv("TABDISPLAY_SENTRY_DSN") ?: ""}\"")
+    }
+    sourceSets {
+        getByName("test") { resources.srcDirs("../../test-fixtures") }
     }
     signingConfigs {
         if (releaseStore != null) {
@@ -64,4 +71,5 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.13.0")
     implementation("androidx.compose.material3:material3:1.4.0")
     implementation("io.sentry:sentry-android:8.20.0")
+    testImplementation("junit:junit:4.13.2")
 }

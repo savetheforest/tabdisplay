@@ -1,7 +1,6 @@
 //! Wi‑Fi pairing. A tablet this PC doesn't know must type, once, the 6-digit code the PC shows; it then gets
-//! a random token it presents in every later HELLO. USB (loopback) connections skip this: the cable is proof.
-//! ponytail: tokens stored in plain JSON in the user's app data and sent unencrypted on the LAN; this stops
-//! strangers from driving the mouse, not a sniffer on the same network. TLS if that ever matters.
+//! a random token it presents in every later HELLO. Loopback is only an endpoint, not proof of a particular cable.
+//! Tokens are protected in transit by TLS; storage permissions and backup policy remain deployment concerns.
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -10,7 +9,7 @@ use std::time::{Duration, Instant};
 const CODE_TTL: Duration = Duration::from_secs(120);
 const MAX_ATTEMPTS: u8 = 5;
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 struct Store {
     pc_id: String,
     devices: Vec<Device>,
@@ -35,18 +34,28 @@ static PENDING: Mutex<Option<Pending>> = Mutex::new(None);
 
 pub fn init(dir: PathBuf) {
     let path = dir.join("paired.json");
-    let mut store: Store = std::fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    let mut store: Store = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
     if store.pc_id.is_empty() {
         store.pc_id = random_hex(8);
-        save(&path, &store);
+        let _ = save(&path, &store);
     }
     *STORE.lock().unwrap() = Some((path, store));
 }
 
-fn save(path: &PathBuf, store: &Store) {
-    let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) else { return }; // not init'ed (tests)
-    let _ = std::fs::create_dir_all(dir);
-    let _ = std::fs::write(path, serde_json::to_string_pretty(store).unwrap());
+fn save(path: &PathBuf, store: &Store) -> Result<(), String> {
+    if path
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .is_none()
+    {
+        return Ok(()); // not init'ed (tests)
+    }
+    let text = serde_json::to_vec_pretty(store)
+        .map_err(|e| format!("não foi possível serializar pareamento: {e}"))?;
+    crate::settings::persist(path, &text)
 }
 
 fn with<T>(f: impl FnOnce(&PathBuf, &mut Store) -> T) -> T {
@@ -64,21 +73,37 @@ pub fn devices() -> Vec<Device> {
     with(|_, s| s.devices.clone())
 }
 
-pub fn forget(id: &str) {
-    with(|path, s| {
-        s.devices.retain(|d| d.id != id);
-        save(path, s);
-    })
+fn forget_store(path: &PathBuf, store: &mut Store, id: &str) -> Result<(), String> {
+    let mut next = store.clone();
+    next.devices.retain(|d| d.id != id);
+    save(path, &next)?;
+    *store = next;
+    Ok(())
+}
+
+pub fn forget(id: &str) -> Result<(), String> {
+    let mut guard = STORE.lock().unwrap();
+    let (path, store) = guard.get_or_insert_with(|| (PathBuf::new(), Store::default()));
+    forget_store(path, store, id)
 }
 
 pub fn is_paired(id: &str, token: &str) -> bool {
-    with(|_, s| s.devices.iter().any(|d| d.id == id && !token.is_empty() && d.token == token))
+    with(|_, s| {
+        s.devices
+            .iter()
+            .any(|d| d.id == id && !token.is_empty() && d.token == token)
+    })
 }
 
 /// Shows a fresh code on the PC for `device_name` and returns it.
 pub fn start(device_name: &str) -> String {
     let code = format!("{:06}", u32::from_le_bytes(random::<4>()) % 1_000_000);
-    *PENDING.lock().unwrap() = Some(Pending { device_name: device_name.into(), code: code.clone(), expires: Instant::now() + CODE_TTL, attempts: 0 });
+    *PENDING.lock().unwrap() = Some(Pending {
+        device_name: device_name.into(),
+        code: code.clone(),
+        expires: Instant::now() + CODE_TTL,
+        attempts: 0,
+    });
     code
 }
 
@@ -105,7 +130,9 @@ pub enum Check {
 
 pub fn check(code: &str) -> Check {
     let mut guard = PENDING.lock().unwrap();
-    let Some(p) = guard.as_mut() else { return Check::Over };
+    let Some(p) = guard.as_mut() else {
+        return Check::Over;
+    };
     if Instant::now() > p.expires || p.attempts >= MAX_ATTEMPTS {
         *guard = None;
         return Check::Over;
@@ -123,14 +150,29 @@ pub fn check(code: &str) -> Check {
 }
 
 /// Records the tablet as paired (replacing an older pairing of the same device) and returns its token.
-pub fn complete(id: &str, name: &str) -> String {
+fn complete_store(
+    path: &PathBuf,
+    store: &mut Store,
+    id: &str,
+    name: &str,
+) -> Result<String, String> {
     let token = random_hex(32);
-    with(|path, s| {
-        s.devices.retain(|d| d.id != id);
-        s.devices.push(Device { id: id.into(), name: name.into(), token: token.clone() });
-        save(path, s);
+    let mut next = store.clone();
+    next.devices.retain(|d| d.id != id);
+    next.devices.push(Device {
+        id: id.into(),
+        name: name.into(),
+        token: token.clone(),
     });
-    token
+    save(path, &next)?;
+    *store = next;
+    Ok(token)
+}
+
+pub fn complete(id: &str, name: &str) -> Result<String, String> {
+    let mut guard = STORE.lock().unwrap();
+    let (path, store) = guard.get_or_insert_with(|| (PathBuf::new(), Store::default()));
+    complete_store(path, store, id, name)
 }
 
 fn random<const N: usize>() -> [u8; N] {
@@ -159,10 +201,12 @@ mod tests {
         assert_eq!(check(&code), Check::Ok);
         assert_eq!(check(&code), Check::Over); // single use
 
-        let token = complete("tab-1", "Redmi Pad 2");
+        let token = complete("tab-1", "Redmi Pad 2").unwrap();
         assert!(is_paired("tab-1", &token));
-        assert!(!is_paired("tab-1", "nope") && !is_paired("tab-2", &token) && !is_paired("tab-1", ""));
-        forget("tab-1");
+        assert!(
+            !is_paired("tab-1", "nope") && !is_paired("tab-2", &token) && !is_paired("tab-1", "")
+        );
+        forget("tab-1").unwrap();
         assert!(!is_paired("tab-1", &token));
 
         start("x");
@@ -170,5 +214,51 @@ mod tests {
             assert_eq!(check("bad"), Check::Wrong);
         }
         assert_eq!(check("bad"), Check::Over); // too many attempts ends it
+    }
+
+    #[test]
+    fn pairing_failure_is_reported_before_memory_authorization() {
+        let root =
+            std::env::temp_dir().join(format!("tabdisplay-pairing-blocker-{}", std::process::id()));
+        let blocker = root.join("not-a-directory");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(&blocker, b"blocker").unwrap();
+        let path = blocker.join("paired.json");
+        let mut store = Store::default();
+
+        assert!(complete_store(&path, &mut store, "tab-failure", "tablet").is_err());
+        assert!(store.devices.is_empty());
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn revocation_failure_does_not_drop_in_memory_authorization() {
+        let root =
+            std::env::temp_dir().join(format!("tabdisplay-revoke-blocker-{}", std::process::id()));
+        let blocker = root.join("not-a-directory");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(&blocker, b"blocker").unwrap();
+        let path = blocker.join("paired.json");
+        let mut store = Store {
+            pc_id: String::new(),
+            devices: vec![Device {
+                id: "tab-revoke".into(),
+                name: "tablet".into(),
+                token: "secret".into(),
+            }],
+        };
+
+        assert!(forget_store(&path, &mut store, "tab-revoke").is_err());
+        assert!(is_paired_in(&store, "tab-revoke", "secret"));
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn is_paired_in(store: &Store, id: &str, token: &str) -> bool {
+        store
+            .devices
+            .iter()
+            .any(|device| device.id == id && device.token == token)
     }
 }

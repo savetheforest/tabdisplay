@@ -13,10 +13,15 @@ impl SCStreamOutputTrait for Handler {
         if !matches!(kind, SCStreamOutputType::Audio) {
             return;
         }
-        let Ok(list) = sample.audio_buffer_list() else { return };
+        let Ok(list) = sample.audio_buffer_list() else {
+            return;
+        };
         let mut pcm = self.0.lock().unwrap();
         let floats = |b: &screencapturekit::cm::AudioBuffer| -> Vec<f32> {
-            b.data().chunks_exact(4).map(|c| f32::from_ne_bytes([c[0], c[1], c[2], c[3]])).collect()
+            b.data()
+                .chunks_exact(4)
+                .map(|c| f32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
+                .collect()
         };
         if list.num_buffers() >= 2 {
             // Planar: one buffer per channel.
@@ -48,7 +53,11 @@ impl Loopback {
     pub fn open() -> Result<Self, String> {
         let content = SCShareableContent::get().map_err(|e| format!("{e:?}"))?;
         let display = content.displays().into_iter().next().ok_or("sem monitor")?;
-        let filter = SCContentFilter::create().with_display(&display).with_excluding_windows(&[]).build().map_err(|e| format!("{e:?}"))?;
+        let filter = SCContentFilter::create()
+            .with_display(&display)
+            .with_excluding_windows(&[])
+            .build()
+            .map_err(|e| format!("{e:?}"))?;
         let config = SCStreamConfiguration::new()
             .with_width(2)
             .with_height(2)
@@ -59,7 +68,9 @@ impl Loopback {
             .with_excludes_current_process_audio(true);
         let pcm = Pcm::default();
         let mut stream = SCStream::new(&filter, &config).map_err(|e| format!("{e:?}"))?;
-        stream.add_output_handler(Handler(pcm.clone()), SCStreamOutputType::Audio).map_err(|e| format!("{e:?}"))?;
+        stream
+            .add_output_handler(Handler(pcm.clone()), SCStreamOutputType::Audio)
+            .map_err(|e| format!("{e:?}"))?;
         stream.start_capture().map_err(|e| format!("{e:?}"))?;
         Ok(Self { stream, pcm })
     }

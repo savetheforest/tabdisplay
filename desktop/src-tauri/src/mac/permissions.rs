@@ -20,7 +20,14 @@ unsafe extern "C" {
     static kCFBooleanTrue: *const c_void;
     static kCFTypeDictionaryKeyCallBacks: c_void;
     static kCFTypeDictionaryValueCallBacks: c_void;
-    fn CFDictionaryCreate(allocator: *const c_void, keys: *const *const c_void, values: *const *const c_void, count: isize, key_cb: *const c_void, value_cb: *const c_void) -> *const c_void;
+    fn CFDictionaryCreate(
+        allocator: *const c_void,
+        keys: *const *const c_void,
+        values: *const *const c_void,
+        count: isize,
+        key_cb: *const c_void,
+        value_cb: *const c_void,
+    ) -> *const c_void;
     fn CFRelease(cf: *const c_void);
 }
 
@@ -45,5 +52,10 @@ pub fn request() {
 
 /// (screen recording, accessibility) granted?
 pub fn granted() -> (bool, bool) {
-    unsafe { (CGPreflightScreenCaptureAccess(), AXIsProcessTrustedWithOptions(std::ptr::null())) }
+    unsafe {
+        (
+            CGPreflightScreenCaptureAccess(),
+            AXIsProcessTrustedWithOptions(std::ptr::null()),
+        )
+    }
 }

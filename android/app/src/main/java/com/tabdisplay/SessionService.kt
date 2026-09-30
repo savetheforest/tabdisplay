@@ -5,10 +5,13 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.pm.ServiceInfo
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.Build
+import androidx.annotation.RequiresApi
 
 /**
  * Keeps the process alive (foreground priority + partial wake lock) while a session is open, so locking the
@@ -28,7 +31,16 @@ class SessionService : Service() {
             .setContentIntent(open)
             .setOngoing(true)
             .build()
-        startForeground(1, notification)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(1, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+        } else {
+            startForeground(1, notification)
+        }
+        if (intent?.action == PAUSE) {
+            wakeLock?.release()
+            wakeLock = null
+            return START_NOT_STICKY
+        }
         if (wakeLock == null) {
             wakeLock = getSystemService(PowerManager::class.java)
                 .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "tabdisplay:session").apply { acquire() }
@@ -41,17 +53,33 @@ class SessionService : Service() {
         wakeLock = null
     }
 
+    /** Android 15 dataSync services must stop promptly when their cumulative timeout fires. */
+    @RequiresApi(Build.VERSION_CODES.VANILLA_ICE_CREAM)
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf(startId)
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
         private const val CHANNEL = "session"
         private const val PC = "pc"
+        private const val PAUSE = "com.tabdisplay.PAUSE_SESSION"
 
         fun start(context: Context, pcName: String) =
             context.startForegroundService(Intent(context, SessionService::class.java).putExtra(PC, pcName))
 
         fun stop(context: Context) {
             context.stopService(Intent(context, SessionService::class.java))
+        }
+
+        fun pause(context: Context) {
+            context.startService(Intent(context, SessionService::class.java).setAction(PAUSE))
+        }
+
+        fun resume(context: Context, pcName: String) {
+            start(context, pcName)
         }
     }
 }
